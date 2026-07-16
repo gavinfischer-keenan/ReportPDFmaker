@@ -3,22 +3,38 @@ PDF Builder
 ===========
 Assembles all PageItems into a final output PDF using PyMuPDF.
 
-Features:
-  - Applies per-page rotation
-  - Optionally inserts page numbers with full customization
-    (position, alignment, font, size, color, style, offsets)
-  - Saves to the user-chosen output path
+Key behaviours
+--------------
+* IMAGE pages are re-rendered from the original source file at save time so
+  that image_rotation, page_landscape, image_scale, and image_offset are all
+  honoured at full quality.  The temp PDF is only a fallback.
+* Non-image pages use fitz page.set_rotation() for orientation.
+* Page numbers are inserted after all pages are assembled.
 """
 
+import io
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 import fitz  # PyMuPDF
+from PIL import Image, ImageOps
 
-if TYPE_CHECKING:
-    pass
+# ---------------------------------------------------------------------------
+# Page dimensions (points, 1pt = 1/72 inch)
+# ---------------------------------------------------------------------------
+A4_PORTRAIT   = (595.28, 841.89)
+A4_LANDSCAPE  = (841.89, 595.28)
+LTR_PORTRAIT  = (612.0,  792.0)
+LTR_LANDSCAPE = (792.0,  612.0)
+
+
+def _page_dims(landscape: bool, page_size: str = "A4") -> tuple[float, float]:
+    if page_size == "Letter":
+        return LTR_LANDSCAPE if landscape else LTR_PORTRAIT
+    return A4_LANDSCAPE if landscape else A4_PORTRAIT
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -28,24 +44,168 @@ if TYPE_CHECKING:
 class PageItem:
     """Represents one page in the assembled output document."""
 
-    id: str                          # Unique ID (e.g. uuid)
-    source_file: str                 # Original source file path
-    source_type: str                 # 'image' | 'text' | 'word' | 'pdf' | '3d' | 'unknown'
-    converted_pdf: str               # Path to single-page temp PDF
-    rotation: int = 0                # 0 | 90 | 180 | 270
-    display_name: str = ""           # User-visible label
+    id: str                              # Unique ID
+    source_file: str                     # Original source file path
+    source_type: str                     # 'image'|'text'|'word'|'pdf'|'3d'|'unknown'
+    converted_pdf: str                   # Path to single-page temp PDF (fallback)
+
+    # Page-level settings
+    rotation: int = 0                    # For non-image pages: whole-page rotation
+    page_landscape: bool = False         # Portrait vs Landscape orientation
+
+    # Image-specific settings (only used when source_type == 'image')
+    image_rotation: int = 0             # Rotates the image content only (not the page)
+    image_scale: float = 1.0            # 1.0=fill page edge-to-edge; >1 clips at edge
+    image_offset_x: float = 0.0        # Horizontal offset from centre (points)
+    image_offset_y: float = 0.0        # Vertical offset from centre (points)
+
+    display_name: str = ""
     warnings: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.display_name:
             self.display_name = Path(self.source_file).name
 
+    @property
+    def is_image(self) -> bool:
+        return self.source_type in ("image", "3d")
+
+
+# ---------------------------------------------------------------------------
+# Image page rendering (shared by preview and final PDF build)
+# ---------------------------------------------------------------------------
+
+def _load_source_image(page_item: PageItem) -> Optional[Image.Image]:
+    """Open, EXIF-correct, and convert the source image to RGB."""
+    try:
+        img = Image.open(page_item.source_file)
+        img = ImageOps.exif_transpose(img)
+        if img.mode not in ("RGB",):
+            img = img.convert("RGB")
+        return img
+    except Exception as e:
+        print(f"[PDFBuilder] Cannot load image {page_item.source_file}: {e}")
+        return None
+
+
+def _render_image_to_pil(
+    page_item: PageItem,
+    pw_px: int,
+    ph_px: int,
+    zoom: float = 1.0,
+) -> Image.Image:
+    """
+    Compose an image page as a PIL image of size (pw_px, ph_px).
+
+    The image is:
+      1. Rotated by image_rotation (90/180/270 CW)
+      2. Scaled to fill the page (no margin) then multiplied by image_scale
+      3. Clipped hard at the page edges — no buffer
+      4. Offset by image_offset_x / image_offset_y
+    """
+    page_img = Image.new("RGB", (pw_px, ph_px), (255, 255, 255))
+
+    src = _load_source_image(page_item)
+    if src is None:
+        return page_img
+
+    # Apply image rotation (PIL rotates CCW, so negate for CW)
+    if page_item.image_rotation:
+        src = src.rotate(-page_item.image_rotation, expand=True)
+
+    img_w, img_h = src.size
+    if img_w == 0 or img_h == 0:
+        return page_img
+
+    # Scale to fill page edge-to-edge (no margin) then apply user scale
+    fit_scale = min(pw_px / img_w, ph_px / img_h)
+    final_scale = fit_scale * page_item.image_scale
+
+    scaled_w = max(1, int(img_w * final_scale))
+    scaled_h = max(1, int(img_h * final_scale))
+
+    src_scaled = src.resize((scaled_w, scaled_h), Image.LANCZOS)
+
+    # Centre + user offset (offset is in pts, convert to px using zoom)
+    cx = pw_px // 2 + int(page_item.image_offset_x * zoom)
+    cy = ph_px // 2 + int(page_item.image_offset_y * zoom)
+
+    x = cx - scaled_w // 2
+    y = cy - scaled_h // 2
+
+    # Clip to page — no buffer on any edge
+    paste_x = max(0, x)
+    paste_y = max(0, y)
+    crop_x1 = max(0, -x)
+    crop_y1 = max(0, -y)
+    crop_x2 = min(scaled_w, pw_px - x)
+    crop_y2 = min(scaled_h, ph_px - y)
+
+    if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+        cropped = src_scaled.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+        page_img.paste(cropped, (paste_x, paste_y))
+
+    return page_img
+
+
+def get_image_canvas_bounds(
+    page_item: PageItem,
+    canvas_w: int,
+    canvas_h: int,
+    zoom: float = 1.0,
+    page_size: str = "A4",
+) -> Optional[tuple[int, int, int, int]]:
+    """
+    Return (cx, cy, img_w_px, img_h_px) for the image within the canvas.
+
+    cx, cy  — canvas pixel coords of the image centre
+    img_w/h — pixel dimensions of the (possibly clipped) image as displayed
+
+    Used by the preview panel to position resize handles.
+    Returns None if not an image page.
+    """
+    if not page_item.is_image:
+        return None
+
+    try:
+        src = _load_source_image(page_item)
+        if src is None:
+            return None
+        if page_item.image_rotation:
+            src = src.rotate(-page_item.image_rotation, expand=True)
+        img_w, img_h = src.size
+    except Exception:
+        return None
+
+    pw_pt, ph_pt = _page_dims(page_item.page_landscape, page_size)
+    pw_px = int(pw_pt * zoom)
+    ph_px = int(ph_pt * zoom)
+
+    fit_scale = min(pw_px / img_w, ph_px / img_h)
+    final_scale = fit_scale * page_item.image_scale
+
+    scaled_w = max(1, int(img_w * final_scale))
+    scaled_h = max(1, int(img_h * final_scale))
+
+    # Centre of the page on the canvas (page is centred)
+    page_canvas_x = max(canvas_w // 2, pw_px // 2 + 10)
+    page_canvas_y = max(canvas_h // 2, ph_px // 2 + 10)
+
+    # Image centre within the page (in canvas coords)
+    img_cx = page_canvas_x + int(page_item.image_offset_x * zoom)
+    img_cy = page_canvas_y + int(page_item.image_offset_y * zoom)
+
+    # Clamp to displayed width (image may be clipped)
+    displayed_w = min(scaled_w, pw_px)
+    displayed_h = min(scaled_h, ph_px)
+
+    return (img_cx, img_cy, displayed_w, displayed_h)
+
 
 # ---------------------------------------------------------------------------
 # Page-number insertion
 # ---------------------------------------------------------------------------
 
-# Map our font name strings to PyMuPDF base-14 font names
 FONT_MAP = {
     "Helvetica":      "helv",
     "Helvetica-Bold": "hebo",
@@ -57,106 +217,71 @@ FONT_MAP = {
 
 
 def _format_page_number(page_num: int, total: int, style: str) -> str:
-    """Format a page number string according to the chosen style."""
     if style == "dashes":
         return f"\u2014 {page_num} \u2014"
     elif style == "page_x":
         return f"Page {page_num}"
     elif style == "page_x_of_y":
         return f"Page {page_num} of {total}"
-    else:  # "plain"
-        return str(page_num)
+    return str(page_num)
 
 
 def _hex_to_fitz_color(hex_color: str) -> tuple[float, float, float]:
-    """Convert #rrggbb to a fitz RGB tuple (0.0-1.0 per channel)."""
     h = hex_color.lstrip("#")
-    return (
-        int(h[0:2], 16) / 255.0,
-        int(h[2:4], 16) / 255.0,
-        int(h[4:6], 16) / 255.0,
-    )
+    return int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0
 
 
-def _insert_page_number(
-    page: fitz.Page,
-    page_num: int,
-    total_pages: int,
-    settings: dict,
-) -> None:
-    """Insert a page number onto a fitz Page according to user settings."""
-    position     = settings.get("position", "bottom")       # "top" | "bottom"
-    alignment    = settings.get("alignment", "center")      # "left" | "center" | "right"
-    font_name    = settings.get("font", "Helvetica")
-    font_size    = float(settings.get("font_size", 10))
-    edge_offset  = float(settings.get("offset_from_edge", 20))
-    side_offset  = float(settings.get("offset_from_side", 50))
-    style        = settings.get("style", "plain")
-    color_hex    = settings.get("color", "#000000")
+def _insert_page_number(page: fitz.Page, page_num: int, total: int, s: dict) -> None:
+    fitz_font = FONT_MAP.get(s.get("font", "Helvetica"), "helv")
+    font_size = float(s.get("font_size", 10))
+    color     = _hex_to_fitz_color(s.get("color", "#000000"))
+    text      = _format_page_number(page_num, total, s.get("style", "plain"))
+    pw, ph    = page.rect.width, page.rect.height
+    text_w    = len(text) * font_size * 0.55
 
-    fitz_font = FONT_MAP.get(font_name, "helv")
-    color     = _hex_to_fitz_color(color_hex)
-    text      = _format_page_number(page_num, total_pages, style)
+    y = ph - float(s.get("offset_from_edge", 20)) if s.get("position", "bottom") == "bottom" \
+        else float(s.get("offset_from_edge", 20)) + font_size
 
-    pw = page.rect.width
-    ph = page.rect.height
-
-    # Approximate text width for alignment calculation
-    # Fitz doesn't easily give us text width without rendering, so we estimate:
-    # average char width ≈ font_size * 0.55 for Helvetica
-    text_width_est = len(text) * font_size * 0.55
-
-    # Y coordinate
-    if position == "top":
-        y = edge_offset + font_size      # Baseline above top edge
+    align = s.get("alignment", "center")
+    if align == "left":
+        x = float(s.get("offset_from_side", 50))
+    elif align == "right":
+        x = pw - float(s.get("offset_from_side", 50)) - text_w
     else:
-        y = ph - edge_offset             # Baseline above bottom edge
-
-    # X coordinate
-    if alignment == "left":
-        x = side_offset
-    elif alignment == "right":
-        x = pw - side_offset - text_width_est
-    else:  # center
-        x = (pw - text_width_est) / 2
-
-    x = max(0.0, x)  # Clamp to page
+        x = (pw - text_w) / 2
 
     try:
-        page.insert_text(
-            (x, y),
-            text,
-            fontname=fitz_font,
-            fontsize=font_size,
-            color=color,
-        )
+        page.insert_text((max(0.0, x), y), text,
+                         fontname=fitz_font, fontsize=font_size, color=color)
     except Exception as e:
-        print(f"[PDFBuilder] Page number insertion failed on page {page_num}: {e}")
+        print(f"[PDFBuilder] Page number error on p{page_num}: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Main build function
+# Build final PDF
 # ---------------------------------------------------------------------------
+
+def _add_image_page(item: PageItem, out_doc: fitz.Document, page_size: str = "A4") -> None:
+    """Render an image PageItem and append it to out_doc at full quality."""
+    pw_pt, ph_pt = _page_dims(item.page_landscape, page_size)
+
+    # Render at 2× for good print quality
+    SCALE = 2.0
+    pil_img = _render_image_to_pil(item, int(pw_pt * SCALE), int(ph_pt * SCALE), zoom=SCALE)
+
+    out_page = out_doc.new_page(width=pw_pt, height=ph_pt)
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=95)
+    out_page.insert_image(fitz.Rect(0, 0, pw_pt, ph_pt), stream=buf.getvalue())
+
 
 def build_pdf(
     pages: list[PageItem],
     output_path: str,
     page_number_settings: Optional[dict] = None,
     progress_callback=None,
+    page_size: str = "A4",
 ) -> tuple[bool, str]:
-    """
-    Assemble a list of PageItems into a single output PDF.
-
-    Args:
-        pages:                  Ordered list of PageItems to include.
-        output_path:            File path for the saved PDF.
-        page_number_settings:   Dict from SettingsManager.get_page_number_settings()
-                                Pass None or {'enabled': False} to skip page numbers.
-        progress_callback:      Optional callable(current: int, total: int, message: str)
-
-    Returns:
-        (success: bool, error_message: str)
-    """
     if not pages:
         return False, "No pages to assemble."
 
@@ -166,49 +291,34 @@ def build_pdf(
     for i, item in enumerate(pages):
         if progress_callback:
             progress_callback(i, total, f"Processing page {i + 1} of {total}…")
-
         try:
-            src_doc = fitz.open(item.converted_pdf)
-            if len(src_doc) == 0:
-                src_doc.close()
-                raise ValueError("Converted PDF is empty")
-
-            # Insert the page into output document
-            out_doc.insert_pdf(src_doc, from_page=0, to_page=0)
-            src_doc.close()
-
-            # Apply rotation to the newly added last page
-            dest_page = out_doc[-1]
-            if item.rotation != 0:
-                dest_page.set_rotation(item.rotation)
-
+            if item.is_image:
+                _add_image_page(item, out_doc, page_size)
+            else:
+                src = fitz.open(item.converted_pdf)
+                if len(src) == 0:
+                    src.close()
+                    raise ValueError("Empty converted PDF")
+                out_doc.insert_pdf(src, from_page=0, to_page=0)
+                src.close()
+                if item.rotation:
+                    out_doc[-1].set_rotation(item.rotation)
         except Exception as e:
-            print(f"[PDFBuilder] Error adding page {i + 1} ({item.display_name}): {e}")
-            # Add an error placeholder page
-            err_page = out_doc.new_page()
-            err_page.insert_text(
-                (50, 100),
-                f"Error loading page {i + 1}:\n{item.display_name}\n{e}",
-                fontsize=11,
-                color=(0.8, 0.1, 0.1),
-            )
+            print(f"[PDFBuilder] Page {i + 1} error: {e}")
+            ep = out_doc.new_page()
+            ep.insert_text((50, 100),
+                           f"Error: page {i + 1}\n{item.display_name}\n{e}",
+                           fontsize=11, color=(0.8, 0.1, 0.1))
 
-    # ------------------------------------------------------------------ #
-    # Add page numbers (after all pages are assembled so we know total)
-    # ------------------------------------------------------------------ #
     if page_number_settings and page_number_settings.get("enabled", False):
-        final_total = len(out_doc)
-        for i, page in enumerate(out_doc):
-            _insert_page_number(page, i + 1, final_total, page_number_settings)
+        ft = len(out_doc)
+        for i, pg in enumerate(out_doc):
+            _insert_page_number(pg, i + 1, ft, page_number_settings)
 
-    # ------------------------------------------------------------------ #
-    # Save
-    # ------------------------------------------------------------------ #
     if progress_callback:
         progress_callback(total, total, "Saving PDF…")
 
     try:
-        # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         out_doc.save(output_path, garbage=4, deflate=True)
         out_doc.close()
@@ -218,24 +328,42 @@ def build_pdf(
         return False, f"Failed to save PDF: {e}"
 
 
+# ---------------------------------------------------------------------------
+# Preview rendering
+# ---------------------------------------------------------------------------
+
 def render_page_preview(
     page_item: PageItem,
     zoom: float = 1.0,
+    page_size: str = "A4",
 ) -> Optional[bytes]:
     """
-    Render a PageItem to a PNG byte string for display in the preview panel.
-    Returns PNG bytes or None on error.
+    Render a PageItem to PNG bytes for the preview panel.
+
+    Image pages are rendered live from the source file so that
+    image_rotation, image_scale, and image_offset are reflected immediately
+    without needing to rebuild the temp PDF.
     """
     try:
-        doc = fitz.open(page_item.converted_pdf)
-        page = doc[0]
-
-        # Build rotation matrix
-        mat = fitz.Matrix(zoom, zoom).prerotate(page_item.rotation)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        png_bytes = pix.tobytes("png")
-        doc.close()
-        return png_bytes
+        if page_item.is_image:
+            pw_pt, ph_pt = _page_dims(page_item.page_landscape, page_size)
+            pil_img = _render_image_to_pil(
+                page_item,
+                int(pw_pt * zoom),
+                int(ph_pt * zoom),
+                zoom=zoom,
+            )
+            buf = io.BytesIO()
+            pil_img.save(buf, format="PNG")
+            return buf.getvalue()
+        else:
+            doc  = fitz.open(page_item.converted_pdf)
+            page = doc[0]
+            mat  = fitz.Matrix(zoom, zoom).prerotate(page_item.rotation)
+            pix  = page.get_pixmap(matrix=mat, alpha=False)
+            png  = pix.tobytes("png")
+            doc.close()
+            return png
     except Exception as e:
         print(f"[PDFBuilder] Preview render failed: {e}")
         return None

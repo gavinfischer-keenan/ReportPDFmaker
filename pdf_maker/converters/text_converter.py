@@ -12,7 +12,7 @@ from pathlib import Path
 
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import pt
+# reportlab.lib.units does not export 'pt' — use raw point values directly
 from reportlab.lib.enums import TA_LEFT
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.colors import HexColor

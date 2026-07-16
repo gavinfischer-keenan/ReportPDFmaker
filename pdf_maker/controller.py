@@ -23,6 +23,7 @@ from .utils.file_utils import get_file_type
 EVT_PAGES_CHANGED    = "pages_changed"
 EVT_PAGE_SELECTED    = "page_selected"
 EVT_PAGE_ROTATED     = "page_rotated"
+EVT_PAGE_LANDSCAPE   = "page_landscape"
 EVT_PROGRESS         = "progress"
 EVT_STATUS           = "status"
 EVT_RESET            = "reset"
@@ -194,14 +195,61 @@ class AppController:
             self.emit(EVT_PAGE_SELECTED, self.current_index)
 
     def rotate_page(self, index: int, degrees: int) -> None:
+        """
+        Rotate a page.
+        - For IMAGE pages: rotates only the image content (page stays portrait/landscape).
+        - For non-image pages: rotates the whole page (PDF-level set_rotation).
+        """
         if 0 <= index < len(self.pages):
-            self.pages[index].rotation = degrees % 360
+            page = self.pages[index]
+            if page.is_image:
+                page.image_rotation = degrees % 360
+            else:
+                page.rotation = degrees % 360
             self.emit(EVT_PAGE_ROTATED, index)
 
     def rotate_all_pages(self, degrees: int) -> None:
+        """Rotate all pages (image_rotation for images, rotation for others)."""
         for page in self.pages:
-            page.rotation = degrees % 360
+            if page.is_image:
+                page.image_rotation = degrees % 360
+            else:
+                page.rotation = degrees % 360
         self.emit(EVT_PAGES_CHANGED, None)
+
+    def set_page_landscape(self, index: int, landscape: bool) -> None:
+        """Toggle portrait / landscape for a single page (image pages only)."""
+        if 0 <= index < len(self.pages):
+            self.pages[index].page_landscape = landscape
+            self.emit(EVT_PAGE_ROTATED, index)   # Reuses PAGE_ROTATED to trigger re-render
+
+    def toggle_page_landscape(self, index: int) -> None:
+        """Toggle the orientation of a single page."""
+        if 0 <= index < len(self.pages):
+            self.pages[index].page_landscape = not self.pages[index].page_landscape
+            self.emit(EVT_PAGE_ROTATED, index)
+
+    def set_all_landscape(self, landscape: bool) -> None:
+        """Set all pages to portrait or landscape."""
+        for page in self.pages:
+            page.page_landscape = landscape
+        self.emit(EVT_PAGES_CHANGED, None)
+
+    def resize_image(self, index: int, scale: float,
+                     offset_x: float = 0.0, offset_y: float = 0.0) -> None:
+        """
+        Resize an image page by setting image_scale.
+        scale=1.0 means fill page edge-to-edge.
+        offset_x/y shift the image from centre (in points).
+        """
+        if 0 <= index < len(self.pages):
+            page = self.pages[index]
+            if page.is_image:
+                page.image_scale    = max(0.05, min(10.0, scale))
+                page.image_offset_x = offset_x
+                page.image_offset_y = offset_y
+                self.emit(EVT_PAGE_ROTATED, index)  # trigger preview re-render
+
 
     # ------------------------------------------------------------------ #
     # Save
