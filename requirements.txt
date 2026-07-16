@@ -1,0 +1,11 @@
+customtkinter>=5.2.0
+pymupdf>=1.24.0
+pypdf>=4.0.0
+Pillow>=10.4.0
+reportlab>=4.2.0
+python-docx>=1.1.0
+docx2pdf>=0.1.8
+# Optional: 3D file support (may require OpenGL drivers)
+# trimesh>=4.0.0
+# pyrender>=0.1.45
+# numpy>=1.24.0

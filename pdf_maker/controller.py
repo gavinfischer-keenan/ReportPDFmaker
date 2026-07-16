@@ -1,0 +1,275 @@
+"""
+Application Controller
+======================
+Central state management and event bus for PDF Maker.
+All UI panels share a single instance of this class.
+"""
+
+import os
+import tempfile
+import threading
+import uuid
+from pathlib import Path
+from typing import Callable, Optional
+
+from .settings_manager import SettingsManager
+from .converters.pdf_builder import PageItem, build_pdf, render_page_preview
+from .utils.file_utils import get_file_type
+
+
+# ---------------------------------------------------------------------------
+# Event names (used by all UI panels to subscribe/publish)
+# ---------------------------------------------------------------------------
+EVT_PAGES_CHANGED    = "pages_changed"
+EVT_PAGE_SELECTED    = "page_selected"
+EVT_PAGE_ROTATED     = "page_rotated"
+EVT_PROGRESS         = "progress"
+EVT_STATUS           = "status"
+EVT_RESET            = "reset"
+EVT_WARNINGS         = "warnings"
+
+
+class AppController:
+    """
+    Central application controller.
+
+    Holds all document state and dispatches events to UI listeners.
+    UI panels register listeners via `on(event, callback)`.
+    """
+
+    def __init__(self, settings: SettingsManager):
+        self.settings:       SettingsManager    = settings
+        self.pages:          list[PageItem]     = []
+        self.current_index:  int                = -1
+        self._listeners:     dict[str, list[Callable]] = {}
+        self._temp_dir:      str                = tempfile.mkdtemp(prefix="pdfmaker_")
+        self._lock                              = threading.Lock()
+
+    # ------------------------------------------------------------------ #
+    # Event bus
+    # ------------------------------------------------------------------ #
+
+    def on(self, event: str, callback: Callable) -> None:
+        """Register a listener for an event."""
+        self._listeners.setdefault(event, []).append(callback)
+
+    def emit(self, event: str, data=None) -> None:
+        """Fire all listeners for an event."""
+        for cb in self._listeners.get(event, []):
+            try:
+                cb(data)
+            except Exception as e:
+                print(f"[AppController] Listener error on '{event}': {e}")
+
+    # ------------------------------------------------------------------ #
+    # File adding
+    # ------------------------------------------------------------------ #
+
+    def add_files(self, file_paths: list[str], done_callback: Optional[Callable] = None) -> None:
+        """Convert and add files in a background thread."""
+        def _worker():
+            all_warnings: list[str] = []
+            new_pages:    list[PageItem] = []
+
+            for fpath in file_paths:
+                self.emit(EVT_STATUS, f"Converting {Path(fpath).name}…")
+                ftype = get_file_type(fpath)
+                try:
+                    pages, warnings = self._convert_file(fpath, ftype)
+                    all_warnings.extend(warnings)
+                    new_pages.extend(pages)
+                except Exception as e:
+                    all_warnings.append(f"❌ Failed: '{Path(fpath).name}': {e}")
+
+            with self._lock:
+                self.pages.extend(new_pages)
+                if self.current_index < 0 and self.pages:
+                    self.current_index = 0
+
+            self.emit(EVT_PAGES_CHANGED, None)
+            if all_warnings:
+                self.emit(EVT_WARNINGS, all_warnings)
+            self.emit(EVT_STATUS, f"Ready — {len(self.pages)} page(s)")
+
+            if done_callback:
+                done_callback(new_pages, all_warnings)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _convert_file(self, fpath: str, ftype: str) -> tuple[list[PageItem], list[str]]:
+        """Dispatch to the appropriate converter and wrap results in PageItems."""
+        page_size = self.settings.get("page_size", "A4")
+
+        if ftype == "image":
+            from .converters.image_converter import convert_image_to_pages
+            temp_pdfs = convert_image_to_pages(fpath, page_size)
+            return self._wrap(fpath, ftype, temp_pdfs, [])
+
+        elif ftype == "text":
+            from .converters.text_converter import convert_text_to_pages
+            temp_pdfs, warnings = convert_text_to_pages(fpath, page_size)
+            return self._wrap(fpath, ftype, temp_pdfs, warnings)
+
+        elif ftype == "word":
+            from .converters.docx_converter import convert_docx_to_pages
+            temp_pdfs, warnings = convert_docx_to_pages(fpath, page_size)
+            return self._wrap(fpath, ftype, temp_pdfs, warnings)
+
+        elif ftype == "pdf":
+            from .converters.pdf_handler import convert_pdf_to_pages
+            temp_pdfs, warnings = convert_pdf_to_pages(fpath, page_size)
+            return self._wrap(fpath, ftype, temp_pdfs, warnings)
+
+        elif ftype == "3d":
+            from .converters.gltf_converter import convert_3d_to_pages
+            temp_pdfs, warnings = convert_3d_to_pages(fpath, page_size)
+            return self._wrap(fpath, ftype, temp_pdfs, warnings)
+
+        else:
+            from .converters.image_converter import convert_image_to_pages
+            try:
+                temp_pdfs = convert_image_to_pages(fpath, page_size)
+                warnings  = [f"ℹ️ '{Path(fpath).name}' treated as image (unknown type)."]
+                return self._wrap(fpath, "unknown", temp_pdfs, warnings)
+            except Exception as e:
+                from .converters.pdf_handler import _make_error_page
+                err   = _make_error_page(f"Unsupported file:\n{Path(fpath).name}\n\n{e}")
+                warns = [f"❌ Could not import '{Path(fpath).name}': {e}"]
+                return self._wrap(fpath, "unknown", [err], warns)
+
+    @staticmethod
+    def _wrap(
+        source_file: str,
+        source_type: str,
+        temp_pdfs:   list[str],
+        warnings:    list[str],
+    ) -> tuple[list[PageItem], list[str]]:
+        fname = Path(source_file).name
+        items = []
+        for i, pdf_path in enumerate(temp_pdfs):
+            label = fname if len(temp_pdfs) == 1 else f"{fname} (p.{i + 1})"
+            items.append(PageItem(
+                id=str(uuid.uuid4()),
+                source_file=source_file,
+                source_type=source_type,
+                converted_pdf=pdf_path,
+                rotation=0,
+                display_name=label,
+                warnings=warnings if i == 0 else [],
+            ))
+        return items, warnings
+
+    # ------------------------------------------------------------------ #
+    # Page manipulation
+    # ------------------------------------------------------------------ #
+
+    def select_page(self, index: int) -> None:
+        if 0 <= index < len(self.pages):
+            self.current_index = index
+            self.emit(EVT_PAGE_SELECTED, index)
+
+    def remove_page(self, index: int) -> None:
+        if 0 <= index < len(self.pages):
+            self.pages.pop(index)
+            if self.current_index >= len(self.pages):
+                self.current_index = len(self.pages) - 1
+            self.emit(EVT_PAGES_CHANGED, None)
+
+    def move_page_up(self, index: int) -> None:
+        if index > 0:
+            self.pages[index], self.pages[index - 1] = (
+                self.pages[index - 1], self.pages[index]
+            )
+            self.current_index = index - 1
+            self.emit(EVT_PAGES_CHANGED, None)
+            self.emit(EVT_PAGE_SELECTED, self.current_index)
+
+    def move_page_down(self, index: int) -> None:
+        if index < len(self.pages) - 1:
+            self.pages[index], self.pages[index + 1] = (
+                self.pages[index + 1], self.pages[index]
+            )
+            self.current_index = index + 1
+            self.emit(EVT_PAGES_CHANGED, None)
+            self.emit(EVT_PAGE_SELECTED, self.current_index)
+
+    def rotate_page(self, index: int, degrees: int) -> None:
+        if 0 <= index < len(self.pages):
+            self.pages[index].rotation = degrees % 360
+            self.emit(EVT_PAGE_ROTATED, index)
+
+    def rotate_all_pages(self, degrees: int) -> None:
+        for page in self.pages:
+            page.rotation = degrees % 360
+        self.emit(EVT_PAGES_CHANGED, None)
+
+    # ------------------------------------------------------------------ #
+    # Save
+    # ------------------------------------------------------------------ #
+
+    def save_pdf(
+        self,
+        output_path:       str,
+        progress_callback: Optional[Callable] = None,
+        done_callback:     Optional[Callable] = None,
+    ) -> None:
+        pages_snapshot = list(self.pages)
+        pn_settings    = self.settings.get_page_number_settings()
+
+        def _worker():
+            success, error = build_pdf(
+                pages=pages_snapshot,
+                output_path=output_path,
+                page_number_settings=pn_settings,
+                progress_callback=progress_callback,
+            )
+            if done_callback:
+                done_callback(success, error, output_path)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    # ------------------------------------------------------------------ #
+    # Preview
+    # ------------------------------------------------------------------ #
+
+    def render_page(self, index: int, zoom: float = 1.0) -> Optional[bytes]:
+        if 0 <= index < len(self.pages):
+            return render_page_preview(self.pages[index], zoom)
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Reset & cleanup
+    # ------------------------------------------------------------------ #
+
+    def reset(self) -> None:
+        self.pages.clear()
+        self.current_index = -1
+        self.settings.reset()
+        self.emit(EVT_RESET, None)
+
+    def cleanup(self) -> None:
+        import shutil
+        try:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+        for page in self.pages:
+            try:
+                if os.path.exists(page.converted_pdf):
+                    os.unlink(page.converted_pdf)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------ #
+    # Properties
+    # ------------------------------------------------------------------ #
+
+    @property
+    def page_count(self) -> int:
+        return len(self.pages)
+
+    @property
+    def current_page(self) -> Optional[PageItem]:
+        if 0 <= self.current_index < len(self.pages):
+            return self.pages[self.current_index]
+        return None
