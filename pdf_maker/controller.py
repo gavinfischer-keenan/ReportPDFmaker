@@ -66,27 +66,52 @@ class AppController:
     # File adding
     # ------------------------------------------------------------------ #
 
-    def add_files(self, file_paths: list[str], done_callback: Optional[Callable] = None) -> None:
-        """Convert and add files in a background thread."""
+    def add_files(
+        self,
+        file_paths: list[str],
+        done_callback: Optional[Callable] = None,
+        import_progress_callback: Optional[Callable] = None,
+    ) -> None:
+        """
+        Convert and add files in a background thread.
+
+        import_progress_callback(current, total, filename) fires for each file
+        so the UI can show a progress bar.
+        """
         def _worker():
             all_warnings: list[str] = []
             new_pages:    list[PageItem] = []
+            total = len(file_paths)
 
-            for fpath in file_paths:
-                self.emit(EVT_STATUS, f"Converting {Path(fpath).name}…")
+            for i, fpath in enumerate(file_paths):
+                fname = Path(fpath).name
+                # Notify progress BEFORE processing so bar starts at 0
+                if import_progress_callback:
+                    import_progress_callback(i, total, fname)
+                self.emit(EVT_STATUS, f"Converting {fname}…")
+
                 ftype = get_file_type(fpath)
                 try:
                     pages, warnings = self._convert_file(fpath, ftype)
                     all_warnings.extend(warnings)
                     new_pages.extend(pages)
                 except Exception as e:
-                    all_warnings.append(f"❌ Failed: '{Path(fpath).name}': {e}")
+                    import traceback
+                    detail = traceback.format_exc()
+                    print(f"[Controller] Error converting {fname}:\n{detail}")
+                    all_warnings.append(f"❌ Failed: '{fname}': {e}")
 
+            # Update state once (lock protects the list)
             with self._lock:
                 self.pages.extend(new_pages)
                 if self.current_index < 0 and self.pages:
                     self.current_index = 0
 
+            # Signal completion progress (fires done callback in UI)
+            if import_progress_callback:
+                import_progress_callback(total, total, "")
+
+            # Emit UI events — the UI panels must schedule these on the main thread
             self.emit(EVT_PAGES_CHANGED, None)
             if all_warnings:
                 self.emit(EVT_WARNINGS, all_warnings)
@@ -96,6 +121,7 @@ class AppController:
                 done_callback(new_pages, all_warnings)
 
         threading.Thread(target=_worker, daemon=True).start()
+
 
     def _convert_file(self, fpath: str, ftype: str) -> tuple[list[PageItem], list[str]]:
         """Dispatch to the appropriate converter and wrap results in PageItems."""

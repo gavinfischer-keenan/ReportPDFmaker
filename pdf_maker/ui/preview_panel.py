@@ -175,10 +175,10 @@ class PreviewPanel(ctk.CTkFrame):
     def _register_events(self) -> None:
         from ..controller import (EVT_PAGES_CHANGED, EVT_PAGE_SELECTED,
                                    EVT_PAGE_ROTATED, EVT_RESET)
-        self.controller.on(EVT_PAGES_CHANGED, lambda _: self._on_change())
-        self.controller.on(EVT_PAGE_SELECTED, lambda _: self._on_change())
-        self.controller.on(EVT_PAGE_ROTATED,  lambda _: self._on_change())
-        self.controller.on(EVT_RESET,         lambda _: self._clear())
+        self.controller.on(EVT_PAGES_CHANGED, lambda _: self.after(0, self._on_change))
+        self.controller.on(EVT_PAGE_SELECTED, lambda _: self.after(0, self._on_change))
+        self.controller.on(EVT_PAGE_ROTATED,  lambda _: self.after(0, self._on_change))
+        self.controller.on(EVT_RESET,         lambda _: self.after(0, self._clear))
 
     def _on_change(self) -> None:
         self._update_nav()

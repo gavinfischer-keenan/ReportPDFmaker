@@ -198,15 +198,31 @@ class MainWindow(ctk.CTk):
         return tb
 
     def _build_status_bar(self) -> ctk.CTkFrame:
-        bar = ctk.CTkFrame(self, height=28, corner_radius=6,
+        bar = ctk.CTkFrame(self, height=36, corner_radius=6,
                            fg_color=("gray85", "gray20"))
+
+        # Status text (left)
         self._status_label = ctk.CTkLabel(
             bar, text="Ready",
             font=ctk.CTkFont(size=11), text_color="gray", anchor="w"
         )
         self._status_label.pack(side="left", padx=12)
 
-        # Word status indicator
+        # Import progress bar (hidden by default)
+        self._import_bar_frame = ctk.CTkFrame(bar, fg_color="transparent")
+        self._import_file_label = ctk.CTkLabel(
+            self._import_bar_frame, text="",
+            font=ctk.CTkFont(size=10), text_color="gray", width=200, anchor="w"
+        )
+        self._import_file_label.pack(side="left", padx=(0, 6))
+        self._import_progress = ctk.CTkProgressBar(
+            self._import_bar_frame, width=180, height=12, corner_radius=4
+        )
+        self._import_progress.pack(side="left")
+        self._import_progress.set(0)
+        # Don't pack the frame yet — only shown during import
+
+        # Word status indicator (right)
         self._word_label = ctk.CTkLabel(
             bar, text="", font=ctk.CTkFont(size=11), anchor="e"
         )
@@ -278,15 +294,18 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------ #
 
     def _register_events(self) -> None:
-        self.controller.on(EVT_STATUS,   lambda msg: self._set_status(msg))
-        self.controller.on(EVT_WARNINGS, lambda w: self._show_warnings(w))
-        self.controller.on(EVT_RESET,    lambda _: self._on_reset())
+        # Wrap with after(0,...) so UI ops always run on the main thread,
+        # even when the controller fires from a background worker thread.
+        self.controller.on(EVT_STATUS,   lambda msg: self.after(0, lambda m=msg: self._set_status(m)))
+        self.controller.on(EVT_WARNINGS, lambda w:   self.after(0, lambda ws=w: self._show_warnings(ws)))
+        self.controller.on(EVT_RESET,    lambda _:   self.after(0, self._on_reset))
 
     def _set_status(self, msg: str) -> None:
-        self.after(0, lambda: self._status_label.configure(text=msg))
+        self._status_label.configure(text=msg)
 
     def _show_warnings(self, warnings: list) -> None:
-        self.after(0, lambda: WarningsDialog(self, warnings))
+        if warnings:
+            WarningsDialog(self, warnings)
 
     def _on_reset(self) -> None:
         self._pn_var.set(False)
@@ -304,14 +323,43 @@ class MainWindow(ctk.CTk):
             filetypes=get_dialog_filetypes(),
             parent=self,
         )
-        if files:
-            self._set_status("Converting files…")
-            self.controller.add_files(list(files))
+        if not files:
+            return
+
+        total = len(files)
+        self._set_status(f"Importing {total} file{'s' if total > 1 else ''}…")
+        self._show_import_progress(0, total, "")
+
+        def _progress(current: int, ttl: int, fname: str) -> None:
+            """Called from background thread — schedule on main thread."""
+            self.after(0, lambda c=current, t=ttl, f=fname:
+                       self._update_import_progress(c, t, f))
+
+        self.controller.add_files(list(files), import_progress_callback=_progress)
+
+    def _show_import_progress(self, current: int, total: int, fname: str) -> None:
+        """Show the progress bar in the status bar."""
+        self._import_progress.set(0)
+        self._import_file_label.configure(text="")
+        self._import_bar_frame.pack(side="left", padx=(8, 0))
+
+    def _update_import_progress(self, current: int, total: int, fname: str) -> None:
+        """Update or hide the progress bar."""
+        if total <= 0 or current >= total:
+            # Done — hide the bar
+            self._import_bar_frame.pack_forget()
+            return
+        ratio = current / total
+        self._import_progress.set(ratio)
+        label = f"{current + 1}/{total}  {fname[:30]}{'…' if len(fname) > 30 else ''}"
+        self._import_file_label.configure(text=label)
+
 
     def _remove_selected(self) -> None:
         idx = self.controller.current_index
         if idx >= 0:
             self.controller.remove_page(idx)
+
 
     def _toggle_theme(self) -> None:
         current = ctk.get_appearance_mode()

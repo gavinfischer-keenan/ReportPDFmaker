@@ -3,6 +3,11 @@ File List Panel
 ===============
 Left panel showing all pages in the document queue.
 Selected row gets a green border highlight.
+
+Threading note
+--------------
+Controller events fire from background threads.  All callbacks use
+`self.after(0, ...)` to ensure tkinter operations run on the main thread.
 """
 
 import tkinter as tk
@@ -10,12 +15,11 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 import customtkinter as ctk
 
-from ..utils.file_utils import get_file_icon, get_file_type
+from ..utils.file_utils import get_file_icon
 
 if TYPE_CHECKING:
     from ..controller import AppController
 
-# Color map for file type badges
 TYPE_COLORS = {
     "image":   ("#4a9eff", "#1a5fa8"),
     "text":    ("#2ecc71", "#1a7a43"),
@@ -26,11 +30,9 @@ TYPE_COLORS = {
 }
 
 SELECTED_BG     = ("#dce8ff", "#1a3a5c")
-SELECTED_BORDER = "#2ecc71"   # Green border for selected page
-HOVER_BG        = ("#f0f4ff", "#1f2d40")
-HOVER_BORDER    = ("gray70",  "gray50")
-NORMAL_BG       = "transparent"   # Must be a string for CTk 6+
-NORMAL_BORDER   = "transparent"
+SELECTED_BORDER = "#2ecc71"
+HOVER_BG        = ("#eef2ff", "#1f2d40")
+NORMAL_BG       = "transparent"
 
 
 class FileListPanel(ctk.CTkFrame):
@@ -93,14 +95,14 @@ class FileListPanel(ctk.CTkFrame):
         self._del_btn.pack(side="right")
 
     # ------------------------------------------------------------------ #
-    # Event registration
+    # Event registration  (all callbacks deferred to main thread)
     # ------------------------------------------------------------------ #
 
     def _register_events(self) -> None:
         from ..controller import EVT_PAGES_CHANGED, EVT_PAGE_SELECTED, EVT_RESET
-        self.controller.on(EVT_PAGES_CHANGED, lambda _: self._refresh())
-        self.controller.on(EVT_PAGE_SELECTED,  lambda idx: self._highlight(idx))
-        self.controller.on(EVT_RESET,          lambda _: self._refresh())
+        self.controller.on(EVT_PAGES_CHANGED, lambda _: self.after(0, self._refresh))
+        self.controller.on(EVT_PAGE_SELECTED, lambda idx: self.after(0, lambda: self._highlight(idx)))
+        self.controller.on(EVT_RESET,         lambda _: self.after(0, self._refresh))
 
     # ------------------------------------------------------------------ #
     # Rendering
@@ -124,14 +126,14 @@ class FileListPanel(ctk.CTkFrame):
         self._highlight(self.controller.current_index)
 
     def _build_row(self, idx: int, page) -> ctk.CTkFrame:
+        """Build one row — no border by default, green border when selected."""
         row = ctk.CTkFrame(
             self._scroll_frame,
             corner_radius=5,
             height=46,
             cursor="hand2",
-            border_width=2,
-            border_color=NORMAL_BORDER,
             fg_color=NORMAL_BG,
+            border_width=0,           # No border unless selected
         )
         row.pack_propagate(False)
 
@@ -155,14 +157,16 @@ class FileListPanel(ctk.CTkFrame):
         name_label.pack(anchor="w", padx=2)
 
         sub_text = f"#{idx + 1}"
-        if getattr(page, 'image_rotation', 0):
-            sub_text += f"  ↻{page.image_rotation}°"
+        img_rot = getattr(page, 'image_rotation', 0)
+        if img_rot:
+            sub_text += f"  ↻{img_rot}°"
         elif page.rotation:
             sub_text += f"  ↻{page.rotation}°"
-        if page.page_landscape:
-            sub_text += "  ⬛↔"
+        if getattr(page, 'page_landscape', False):
+            sub_text += "  ↔"
         if page.warnings:
             sub_text += "  ⚠"
+
         sub_label = ctk.CTkLabel(
             text_frame, text=sub_text,
             anchor="w", font=ctk.CTkFont(size=10), text_color="gray"
@@ -180,25 +184,23 @@ class FileListPanel(ctk.CTkFrame):
         self._selected_index = index
         for i, frame in enumerate(self._row_frames):
             if i == index:
-                # Green border + selected background
+                # Green border = selected
                 frame.configure(
                     fg_color=SELECTED_BG,
-                    border_color=SELECTED_BORDER,
                     border_width=2,
+                    border_color=SELECTED_BORDER,
                 )
             else:
+                # No border = unselected (avoids "transparent border" CTk error)
                 frame.configure(
                     fg_color=NORMAL_BG,
-                    border_color=NORMAL_BORDER,
-                    border_width=2,
+                    border_width=0,
                 )
 
     def _on_hover(self, row: ctk.CTkFrame, idx: int, entering: bool) -> None:
         if idx != self._selected_index:
-            if entering:
-                row.configure(fg_color=HOVER_BG, border_color=HOVER_BORDER)
-            else:
-                row.configure(fg_color=NORMAL_BG, border_color=NORMAL_BORDER)
+            row.configure(fg_color=HOVER_BG if entering else NORMAL_BG)
+            # Don't touch border_width/border_color to avoid CTk transparency errors
 
     def _on_row_click(self, idx: int) -> None:
         self.controller.select_page(idx)
