@@ -258,8 +258,117 @@ def _insert_page_number(page: fitz.Page, page_num: int, total: int, s: dict) -> 
 
 
 # ---------------------------------------------------------------------------
-# Build final PDF
+# PIL page-number overlay (used by preview only)
 # ---------------------------------------------------------------------------
+
+_WINDOWS_FONT_MAP = {
+    "Helvetica":      ["arial.ttf",    "calibri.ttf"],
+    "Helvetica-Bold": ["arialbd.ttf",  "calibrib.ttf"],
+    "Times-Roman":    ["times.ttf",    "georgia.ttf"],
+    "Times-Bold":     ["timesbd.ttf",  "georgiab.ttf"],
+    "Courier":        ["cour.ttf",     "consola.ttf"],
+    "Courier-Bold":   ["courbd.ttf",   "consolab.ttf"],
+}
+
+
+def _pil_font(font_name: str, size_px: int):
+    from PIL import ImageFont
+    import os
+    candidates = _WINDOWS_FONT_MAP.get(font_name, ["arial.ttf"])
+    font_dir = r"C:\Windows\Fonts"
+    for fname in candidates:
+        path = os.path.join(font_dir, fname)
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size_px)
+            except Exception:
+                continue
+    # Cross-platform fallbacks
+    for name in ["DejaVuSans.ttf", "FreeSans.ttf"]:
+        for d in ["/usr/share/fonts", "/usr/local/share/fonts"]:
+            path = os.path.join(d, name)
+            if os.path.exists(path):
+                try:
+                    return ImageFont.truetype(path, size_px)
+                except Exception:
+                    continue
+    try:
+        return ImageFont.load_default(size=size_px)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _draw_page_number_pil(
+    img: Image.Image,
+    settings: dict,
+    page_num: int,
+    total: int,
+    zoom: float,
+) -> Image.Image:
+    """
+    Overlay a page number on a PIL image using the same positioning logic
+    as _insert_page_number (fitz version used in the final PDF).
+    """
+    from PIL import ImageDraw
+
+    text      = _format_page_number(page_num, total, settings.get("style", "plain"))
+    font_name = settings.get("font", "Helvetica")
+    font_size_pt = float(settings.get("font_size", 10))
+    font_size_px = max(8, int(font_size_pt * zoom * 1.33))  # pt→px at 96dpi
+    color_hex = settings.get("color", "#000000")
+    h = color_hex.lstrip("#")
+    color = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+    font = _pil_font(font_name, font_size_px)
+    draw = ImageDraw.Draw(img)
+
+    # Measure text
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+    except Exception:
+        text_w = len(text) * font_size_px // 2
+        text_h = font_size_px
+
+    pw, ph = img.size
+    edge_px = int(float(settings.get("offset_from_edge", 20)) * zoom)
+    side_px = int(float(settings.get("offset_from_side", 50)) * zoom)
+
+    position  = settings.get("position",  "bottom")
+    alignment = settings.get("alignment", "center")
+
+    y = ph - edge_px - text_h if position == "bottom" else edge_px
+
+    if alignment == "left":
+        x = side_px
+    elif alignment == "right":
+        x = pw - side_px - text_w
+    else:
+        x = (pw - text_w) // 2
+
+    x = max(0, min(x, pw - text_w))
+    y = max(0, min(y, ph - text_h))
+
+    # Semi-transparent backdrop so numbers are legible on any image
+    pad = 3
+    try:
+        overlay = Image.new("RGBA", img.size)
+        ov_draw = ImageDraw.Draw(overlay)
+        ov_draw.rectangle(
+            [x - pad, y - pad, x + text_w + pad, y + text_h + pad],
+            fill=(255, 255, 255, 160),
+        )
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        img = Image.alpha_composite(img, overlay).convert("RGB")
+        draw = ImageDraw.Draw(img)
+    except Exception:
+        pass
+
+    draw.text((x, y), text, fill=color, font=font)
+    return img
+
 
 def _add_image_page(item: PageItem, out_doc: fitz.Document, page_size: str = "A4") -> None:
     """Render an image PageItem and append it to out_doc at full quality."""
@@ -336,14 +445,19 @@ def render_page_preview(
     page_item: PageItem,
     zoom: float = 1.0,
     page_size: str = "A4",
+    page_number_settings: Optional[dict] = None,
+    page_num: int = 1,
+    total_pages: int = 1,
 ) -> Optional[bytes]:
     """
     Render a PageItem to PNG bytes for the preview panel.
 
-    Image pages are rendered live from the source file so that
-    image_rotation, image_scale, and image_offset are reflected immediately
-    without needing to rebuild the temp PDF.
+    If page_number_settings is provided and enabled, the page number is
+    composited onto the preview image at the same position/style as the
+    final PDF output.
     """
+    pil_img: Optional[Image.Image] = None
+
     try:
         if page_item.is_image:
             pw_pt, ph_pt = _page_dims(page_item.page_landscape, page_size)
@@ -353,17 +467,30 @@ def render_page_preview(
                 int(ph_pt * zoom),
                 zoom=zoom,
             )
-            buf = io.BytesIO()
-            pil_img.save(buf, format="PNG")
-            return buf.getvalue()
         else:
             doc  = fitz.open(page_item.converted_pdf)
             page = doc[0]
             mat  = fitz.Matrix(zoom, zoom).prerotate(page_item.rotation)
             pix  = page.get_pixmap(matrix=mat, alpha=False)
-            png  = pix.tobytes("png")
             doc.close()
-            return png
+            pil_img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+        # Overlay page number if enabled
+        if (pil_img is not None
+                and page_number_settings
+                and page_number_settings.get("enabled", False)):
+            pil_img = _draw_page_number_pil(
+                pil_img, page_number_settings, page_num, total_pages, zoom
+            )
+
+        if pil_img is None:
+            return None
+
+        buf = io.BytesIO()
+        pil_img.save(buf, format="PNG")
+        return buf.getvalue()
+
     except Exception as e:
         print(f"[PDFBuilder] Preview render failed: {e}")
+        import traceback; traceback.print_exc()
         return None

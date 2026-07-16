@@ -204,12 +204,24 @@ class PreviewPanel(ctk.CTkFrame):
             self._clear()
             return
 
-        zoom = ZOOM_STEPS[self._zoom_idx]
-        page = self.controller.pages[idx]
+        zoom      = ZOOM_STEPS[self._zoom_idx]
+        page      = self.controller.pages[idx]
+        page_num  = idx + 1
+        total     = self.controller.page_count
+        page_size = self.controller.settings.get("page_size", "A4")
+
+        # Snapshot page number settings at render time so the overlay is live
+        pn_settings = self.controller.settings.get_page_number_settings()
 
         def _worker():
             from ..converters.pdf_builder import render_page_preview
-            png = render_page_preview(page, zoom)
+            png = render_page_preview(
+                page, zoom,
+                page_size=page_size,
+                page_number_settings=pn_settings,
+                page_num=page_num,
+                total_pages=total,
+            )
             self.after(0, lambda: self._display(png, page, zoom))
 
         threading.Thread(target=_worker, daemon=True).start()

@@ -338,19 +338,25 @@ class MainWindow(ctk.CTk):
         self.controller.add_files(list(files), import_progress_callback=_progress)
 
     def _show_import_progress(self, current: int, total: int, fname: str) -> None:
-        """Show the progress bar in the status bar."""
+        """Show the progress bar in the status bar, starting red."""
         self._import_progress.set(0)
+        self._import_progress.configure(progress_color="#e74c3c")  # Start red
         self._import_file_label.configure(text="")
         self._import_bar_frame.pack(side="left", padx=(8, 0))
 
     def _update_import_progress(self, current: int, total: int, fname: str) -> None:
-        """Update or hide the progress bar."""
+        """Update or hide the progress bar, interpolating red→blue as it fills."""
         if total <= 0 or current >= total:
             # Done — hide the bar
             self._import_bar_frame.pack_forget()
             return
         ratio = current / total
         self._import_progress.set(ratio)
+        # Interpolate RGB: red #e74c3c → blue #4a9eff
+        r = int(231 + (74  - 231) * ratio)
+        g = int(76  + (158 - 76)  * ratio)
+        b = int(60  + (255 - 60)  * ratio)
+        self._import_progress.configure(progress_color=f"#{r:02x}{g:02x}{b:02x}")
         label = f"{current + 1}/{total}  {fname[:30]}{'…' if len(fname) > 30 else ''}"
         self._import_file_label.configure(text=label)
 
@@ -380,10 +386,14 @@ class MainWindow(ctk.CTk):
 
     def _on_page_numbers_toggle(self) -> None:
         self.settings.set("page_numbers", self._pn_var.get())
+        # Re-render preview so user sees the overlay immediately
+        self.after(0, self._preview_panel._schedule_render)
 
     def _open_pn_settings(self) -> None:
         def _on_apply():
             self._pn_var.set(self.settings.get("page_numbers"))
+            # Re-render preview to reflect new settings
+            self.after(0, self._preview_panel._schedule_render)
         PageNumberSettingsDialog(self, self.settings, on_apply=_on_apply)
 
     def _browse_output_folder(self) -> None:
