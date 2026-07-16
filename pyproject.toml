@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdfmaker"
+version = "1.0.0"
+description = "Desktop GUI application for combining and editing multi-format files into a single PDF"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Gavin Fischer-Keenan" }
+]
+keywords = ["pdf", "converter", "gui", "image", "word", "docx", "merge"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: Capture :: Scanners",
+    "Topic :: Office/Business",
+]
+dependencies = [
+    "customtkinter>=5.2.0",
+    "pymupdf>=1.24.0",
+    "pypdf>=4.0.0",
+    "Pillow>=10.4.0",
+    "reportlab>=4.2.0",
+    "python-docx>=1.1.0",
+    "docx2pdf>=0.1.8",
+]
+
+[project.scripts]
+pdfmaker = "pdf_maker.app:main"
+
+[project.urls]
+Homepage = "https://github.com/gavinfischer-keenan/ReportPDFmaker"
+Repository = "https://github.com/gavinfischer-keenan/ReportPDFmaker"
+"Bug Tracker" = "https://github.com/gavinfischer-keenan/ReportPDFmaker/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+"3d" = [
+    "trimesh>=4.0.0",
+    "pyrender>=0.1.45",
+    "numpy>=1.24.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pdf_maker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["pdf_maker"]
+omit = ["pdf_maker/ui/*"]  # UI code requires a display

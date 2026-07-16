@@ -28,3 +28,20 @@ ENV/
 Thumbs.db
 *.tmp
 *.temp
+
+# Pytest & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# PyInstaller
+*.spec.bak
+spec/
+
+# IDE
+.vscode/
+.idea/
+
+# Temp PDF files created during conversion
+pdfmaker_*/
