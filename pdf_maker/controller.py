@@ -286,9 +286,11 @@ class AppController:
         output_path:       str,
         progress_callback: Optional[Callable] = None,
         done_callback:     Optional[Callable] = None,
+        jpeg_quality:      int = 95,
     ) -> None:
         pages_snapshot = list(self.pages)
         pn_settings    = self.settings.get_page_number_settings()
+        _quality       = jpeg_quality
 
         def _worker():
             success, error = build_pdf(
@@ -296,6 +298,7 @@ class AppController:
                 output_path=output_path,
                 page_number_settings=pn_settings,
                 progress_callback=progress_callback,
+                jpeg_quality=_quality,
             )
             if done_callback:
                 done_callback(success, error, output_path)

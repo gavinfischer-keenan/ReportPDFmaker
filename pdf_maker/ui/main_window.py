@@ -38,6 +38,10 @@ from .dialogs import (
     AboutDialog,
     ProgressDialog,
 )
+from .shrink_dialog import ShrinkPDFDialog
+
+# JPEG quality used when 'Optimize for file size' is checked
+_OPTIMIZE_JPEG_QUALITY = 75   # Standard level (Adobe / Apple Quartz equivalent)
 
 
 class MainWindow(ctk.CTk):
@@ -169,6 +173,20 @@ class MainWindow(ctk.CTk):
         ).pack(side="left", padx=(0, 16))
 
         # Right-side controls
+        # ── Shrink a PDF ────────────────────────────────────────── #
+        ctk.CTkButton(
+            tb, text="📉  Shrink a PDF", width=124, height=36,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=("#6c5ce7", "#5a4bd1"),
+            hover_color=("#5a4bd1", "#4a3bc1"),
+            text_color="white",
+            command=self._open_shrink_dialog,
+        ).pack(side="right", padx=(4, 4))
+
+        # Separator
+        ctk.CTkFrame(tb, width=1, height=30,
+                     fg_color=("gray70", "gray40")).pack(side="right", padx=4)
+
         ctk.CTkButton(
             tb, text="ℹ  About", width=80, height=36,
             font=ctk.CTkFont(size=11),
@@ -250,7 +268,34 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=14),
             fg_color="transparent", border_width=1,
             command=self._open_pn_settings,
-        ).pack(side="left", padx=(0, 16))
+        ).pack(side="left", padx=(0, 8))
+
+        # Separator
+        ctk.CTkFrame(bar, width=1, height=30,
+                     fg_color=("gray70", "gray40")).pack(side="left", padx=6)
+
+        # Optimize for file size checkbox
+        self._optimize_var = ctk.BooleanVar(
+            value=self.settings.get("optimize_file_size", False)
+        )
+        opt_cb = ctk.CTkCheckBox(
+            bar,
+            text="⚡ Optimize for file size",
+            variable=self._optimize_var,
+            font=ctk.CTkFont(size=12),
+            fg_color="#6c5ce7",
+            hover_color="#5a4bd1",
+            command=self._on_optimize_toggle,
+        )
+        opt_cb.pack(side="left", padx=(0, 4))
+
+        # Tooltip-style label explaining what Standard means
+        ctk.CTkLabel(
+            bar,
+            text="(150 dpi · JPEG 75%)",
+            font=ctk.CTkFont(size=10),
+            text_color=("#888888", "#888888"),
+        ).pack(side="left", padx=(0, 8))
 
         # Save button
         ctk.CTkButton(
@@ -389,6 +434,15 @@ class MainWindow(ctk.CTk):
         # Re-render preview so user sees the overlay immediately
         self.after(0, self._preview_panel._schedule_render)
 
+    def _on_optimize_toggle(self) -> None:
+        """Persist the 'Optimize for file size' checkbox state."""
+        self.settings.set("optimize_file_size", self._optimize_var.get())
+
+    def _open_shrink_dialog(self) -> None:
+        """Open the standalone Shrink a PDF dialog."""
+        ShrinkPDFDialog(self)
+
+
     def _open_pn_settings(self) -> None:
         def _on_apply():
             self._pn_var.set(self.settings.get("page_numbers"))
@@ -457,7 +511,12 @@ class MainWindow(ctk.CTk):
                 self._set_status(f"❌  Save failed: {error}")
                 WarningsDialog(self, [f"Save failed:\n{error}"])
 
-        self.controller.save_pdf(output_path, _progress, _done)
+        self.controller.save_pdf(
+            output_path, _progress, _done,
+            jpeg_quality=(
+                _OPTIMIZE_JPEG_QUALITY if self._optimize_var.get() else 95
+            ),
+        )
 
     # ------------------------------------------------------------------ #
     # Word status check
