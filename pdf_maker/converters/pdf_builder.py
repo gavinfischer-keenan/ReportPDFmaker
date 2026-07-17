@@ -58,6 +58,7 @@ class PageItem:
     image_scale: float = 1.0            # 1.0=fill page edge-to-edge; >1 clips at edge
     image_offset_x: float = 0.0        # Horizontal offset from centre (points)
     image_offset_y: float = 0.0        # Vertical offset from centre (points)
+    image_crop: tuple[float, float, float, float] | None = None  # (left, top, right, bottom) as percentages 0.0-1.0
 
     display_name: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -93,6 +94,7 @@ def _render_image_to_pil(
     pw_px: int,
     ph_px: int,
     zoom: float = 1.0,
+    ignore_crop: bool = False,
 ) -> Image.Image:
     """
     Compose an image page as a PIL image of size (pw_px, ph_px).
@@ -113,13 +115,27 @@ def _render_image_to_pil(
     if page_item.image_rotation:
         src = src.rotate(-page_item.image_rotation, expand=True)
 
+    # Apply crop box if defined (and not ignored for preview mode)
+    if page_item.image_crop and not ignore_crop:
+        img_w, img_h = src.size
+        l, t, r, b = page_item.image_crop
+        crop_rect = (
+            int(l * img_w),
+            int(t * img_h),
+            int(r * img_w),
+            int(b * img_h)
+        )
+        src = src.crop(crop_rect)
+
     img_w, img_h = src.size
     if img_w == 0 or img_h == 0:
         return page_img
 
     # Scale to fill page edge-to-edge (no margin) then apply user scale
     fit_scale = min(pw_px / img_w, ph_px / img_h)
-    final_scale = fit_scale * page_item.image_scale
+    
+    eff_scale = 1.0 if ignore_crop else page_item.image_scale
+    final_scale = fit_scale * eff_scale
 
     scaled_w = max(1, int(img_w * final_scale))
     scaled_h = max(1, int(img_h * final_scale))
@@ -127,8 +143,10 @@ def _render_image_to_pil(
     src_scaled = src.resize((scaled_w, scaled_h), Image.LANCZOS)
 
     # Centre + user offset (offset is in pts, convert to px using zoom)
-    cx = pw_px // 2 + int(page_item.image_offset_x * zoom)
-    cy = ph_px // 2 + int(page_item.image_offset_y * zoom)
+    eff_ox = 0.0 if ignore_crop else page_item.image_offset_x
+    eff_oy = 0.0 if ignore_crop else page_item.image_offset_y
+    cx = pw_px // 2 + int(eff_ox * zoom)
+    cy = ph_px // 2 + int(eff_oy * zoom)
 
     x = cx - scaled_w // 2
     y = cy - scaled_h // 2
@@ -475,11 +493,12 @@ def build_pdf(
 
 def render_page_preview(
     page_item: PageItem,
-    zoom: float = 1.0,
+    zoom: float,
     page_size: str = "A4",
     page_number_settings: Optional[dict] = None,
     page_num: int = 1,
     total_pages: int = 1,
+    ignore_crop: bool = False,
 ) -> Optional[bytes]:
     """
     Render a PageItem to PNG bytes for the preview panel.
@@ -498,6 +517,7 @@ def render_page_preview(
                 int(pw_pt * zoom),
                 int(ph_pt * zoom),
                 zoom=zoom,
+                ignore_crop=ignore_crop,
             )
         else:
             doc  = fitz.open(page_item.converted_pdf)

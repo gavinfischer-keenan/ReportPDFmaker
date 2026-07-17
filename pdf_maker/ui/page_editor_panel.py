@@ -69,6 +69,44 @@ class PageEditorPanel(ctk.CTkFrame):
 
         self._divider()
 
+        # ── Image Edit Mode ───────────────────────────────────────────
+        ctk.CTkLabel(
+            self, text="Image Editing",
+            font=ctk.CTkFont(size=12, weight="bold"), anchor="w"
+        ).pack(padx=14, pady=(8, 2), anchor="w")
+
+        self._mode_seg = ctk.CTkSegmentedButton(
+            self, values=["Resize", "Crop"],
+            font=ctk.CTkFont(size=11),
+            command=self._on_mode_change
+        )
+        self._mode_seg.set("Resize")
+        self._mode_seg.pack(padx=14, pady=(2, 6), fill="x")
+
+        # Action buttons frame (Undo & Apply Crop)
+        self._actions_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._actions_frame.pack(padx=14, pady=(0, 6), fill="x")
+
+        self._undo_btn = ctk.CTkButton(
+            self._actions_frame, text="↩️ Undo",
+            font=ctk.CTkFont(size=11), width=60,
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+            command=self._on_undo
+        )
+        self._undo_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        self._apply_crop_btn = ctk.CTkButton(
+            self._actions_frame, text="✂️ Apply Crop",
+            font=ctk.CTkFont(size=11, weight="bold"), width=90,
+            fg_color=("#e67e22", "#d35400"), hover_color=("#d35400", "#b54400"),
+            text_color="white",
+            command=self._apply_crop
+        )
+        # We will grid/pack this only when in crop mode
+        # self._apply_crop_btn.pack(side="left", fill="x", expand=True)
+
+        self._divider()
+
         # ── Image Rotation ────────────────────────────────────────────
         ctk.CTkLabel(
             self, text="Image Rotation",
@@ -244,11 +282,12 @@ class PageEditorPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------ #
 
     def _register_events(self) -> None:
-        from ..controller import (EVT_PAGES_CHANGED, EVT_PAGE_SELECTED,
-                                   EVT_PAGE_ROTATED, EVT_RESET)
-        self.controller.on(EVT_PAGES_CHANGED, lambda _: self.after(0, self._update_state))
+        from ..controller import (EVT_PAGE_SELECTED, EVT_PAGES_CHANGED,
+                                  EVT_PAGE_ROTATED, EVT_MODE_CHANGED, EVT_RESET)
         self.controller.on(EVT_PAGE_SELECTED, lambda _: self.after(0, self._update_state))
+        self.controller.on(EVT_PAGES_CHANGED, lambda _: self.after(0, self._update_state))
         self.controller.on(EVT_PAGE_ROTATED,  lambda _: self.after(0, self._update_state))
+        self.controller.on(EVT_MODE_CHANGED,  lambda _: self.after(0, self._update_state))
         self.controller.on(EVT_RESET,         lambda _: self.after(0, self._update_state))
 
     # ------------------------------------------------------------------ #
@@ -256,16 +295,39 @@ class PageEditorPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------ #
 
     def _update_state(self) -> None:
-        page   = self.controller.current_page
-        idx    = self.controller.current_index
-        total  = self.controller.page_count
-        has_pg = page is not None
-        is_img = has_pg and page.is_image
+        idx = self.controller.current_index
+        page = self.controller.current_page
+        
+        # Mode & Action visibility
+        is_image = bool(page and page.is_image)
+        state = "normal" if is_image else "disabled"
+        self._mode_seg.configure(state=state)
+        
+        # Undo button state
+        can_undo = (self.controller._last_action_state is not None and 
+                    is_image and 
+                    self.controller._last_action_state.id == page.id)
+        self._undo_btn.configure(state="normal" if can_undo else "disabled")
+
+        if is_image:
+            self._mode_seg.set(self.controller.editor_mode.capitalize())
+            if self.controller.editor_mode == "crop":
+                self._apply_crop_btn.pack(side="left", fill="x", expand=True)
+            else:
+                self._apply_crop_btn.pack_forget()
+        else:
+            self._mode_seg.set("Resize")
+            self._apply_crop_btn.pack_forget()
+
+        if not page:
+            self._info_label.configure(text="No page selected")
+            for btn in self._rot_buttons.values():
+                btn.configure(state="disabled", fg_color=BTN_NORMAL)
 
         # Info label
         if page:
             orient = "Landscape" if page.page_landscape else "Portrait"
-            rot    = page.image_rotation if is_img else page.rotation
+            rot    = page.image_rotation if is_image else page.rotation
             self._info_label.configure(
                 text=f"Page {idx + 1} of {total}\n{page.display_name}\n"
                      f"{orient}  |  Rotation: {rot}°"
@@ -308,6 +370,21 @@ class PageEditorPanel(ctk.CTkFrame):
         if has_pg:
             self._up_btn.configure(  state="normal" if idx > 0         else "disabled")
             self._down_btn.configure(state="normal" if idx < total - 1  else "disabled")
+
+    def _on_mode_change(self, value: str) -> None:
+        mode = "crop" if value == "Crop" else "resize"
+        self.controller.set_editor_mode(mode)
+        self._update_state()
+
+    def _apply_crop(self) -> None:
+        from ..controller import EVT_APPLY_CROP
+        self.controller.emit(EVT_APPLY_CROP)
+        self.controller.set_editor_mode("resize")
+        self._update_state()
+
+    def _on_undo(self) -> None:
+        self.controller.undo_last_action()
+        self._update_state()
 
     # ------------------------------------------------------------------ #
     # Actions

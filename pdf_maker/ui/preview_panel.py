@@ -43,6 +43,7 @@ class PreviewPanel(ctk.CTkFrame):
         self._zoom_idx  = ZOOM_DEFAULT
         self._photo:     Optional[ImageTk.PhotoImage] = None
         self._render_pending = False
+        self._temp_crop: Optional[tuple[float, float, float, float]] = None
 
         # Corner handle drag state
         self._drag_corner:      Optional[str]  = None   # 'nw'|'ne'|'sw'|'se'
@@ -174,11 +175,28 @@ class PreviewPanel(ctk.CTkFrame):
 
     def _register_events(self) -> None:
         from ..controller import (EVT_PAGES_CHANGED, EVT_PAGE_SELECTED,
-                                   EVT_PAGE_ROTATED, EVT_RESET)
+                                   EVT_PAGE_ROTATED, EVT_RESET, EVT_MODE_CHANGED, EVT_APPLY_CROP)
         self.controller.on(EVT_PAGES_CHANGED, lambda _: self.after(0, self._on_change))
         self.controller.on(EVT_PAGE_SELECTED, lambda _: self.after(0, self._on_change))
         self.controller.on(EVT_PAGE_ROTATED,  lambda _: self.after(0, self._on_change))
         self.controller.on(EVT_RESET,         lambda _: self.after(0, self._clear))
+        self.controller.on(EVT_MODE_CHANGED,  lambda m: self.after(0, lambda: self._on_mode_change(m)))
+        self.controller.on(EVT_APPLY_CROP,    lambda _: self.after(0, self._on_apply_crop))
+
+    def _on_mode_change(self, mode: str) -> None:
+        page = self.controller.current_page
+        if mode == "crop" and page and page.is_image:
+            self._temp_crop = page.image_crop or (0.0, 0.0, 1.0, 1.0)
+        else:
+            self._temp_crop = None
+        self._on_change()
+
+    def _on_apply_crop(self) -> None:
+        idx = self.controller.current_index
+        page = self.controller.current_page
+        if idx >= 0 and page and page.is_image and self._temp_crop:
+            self.controller.set_image_crop(idx, self._temp_crop)
+            self._temp_crop = None
 
     def _on_change(self) -> None:
         self._update_nav()
@@ -221,6 +239,7 @@ class PreviewPanel(ctk.CTkFrame):
                 page_number_settings=pn_settings,
                 page_num=page_num,
                 total_pages=total,
+                ignore_crop=(self.controller.editor_mode == "crop"),
             )
             self.after(0, lambda: self._display(png, page, zoom))
 
@@ -283,12 +302,15 @@ class PreviewPanel(ctk.CTkFrame):
             src.close()
 
             fit_scale  = min(pw_px / img_w, ph_px / img_h)
-            final_px_w = int(img_w * fit_scale * page.image_scale)
-            final_px_h = int(img_h * fit_scale * page.image_scale)
+            eff_scale  = 1.0 if self.controller.editor_mode == "crop" else page.image_scale
+            final_px_w = int(img_w * fit_scale * eff_scale)
+            final_px_h = int(img_h * fit_scale * eff_scale)
 
             # Image centre on canvas
-            ox_px = int(page.image_offset_x * zoom)
-            oy_px = int(page.image_offset_y * zoom)
+            eff_ox = 0.0 if self.controller.editor_mode == "crop" else page.image_offset_x
+            eff_oy = 0.0 if self.controller.editor_mode == "crop" else page.image_offset_y
+            ox_px = int(eff_ox * zoom)
+            oy_px = int(eff_oy * zoom)
             self._img_cx = page_cx + ox_px
             self._img_cy = page_cy + oy_px
 
@@ -320,8 +342,9 @@ class PreviewPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------ #
 
     def _draw_handles(self) -> None:
-        """Draw green corner squares around the image bounds."""
+        """Draw handles around the image bounds (resize) or crop bounds (crop)."""
         self._canvas.delete("handle")
+        self._canvas.delete("crop_box")
         self._handle_positions.clear()
 
         page = self.controller.current_page
@@ -334,18 +357,41 @@ class PreviewPanel(ctk.CTkFrame):
         hh = self._img_disp_h // 2
         cx, cy = self._img_cx, self._img_cy
 
-        corners = {
-            "nw": (cx - hw, cy - hh),
-            "ne": (cx + hw, cy - hh),
-            "sw": (cx - hw, cy + hh),
-            "se": (cx + hw, cy + hh),
-        }
+        if self.controller.editor_mode == "crop" and self._temp_crop:
+            l, t, r, b = self._temp_crop
+            left_px   = cx - hw + int(l * self._img_disp_w)
+            top_px    = cy - hh + int(t * self._img_disp_h)
+            right_px  = cx - hw + int(r * self._img_disp_w)
+            bottom_px = cy - hh + int(b * self._img_disp_h)
+            
+            # Draw crop rectangle overlay
+            self._canvas.create_rectangle(
+                left_px, top_px, right_px, bottom_px,
+                outline="#3498db", width=2, dash=(5, 5),
+                tags=("crop_box",)
+            )
+            
+            corners = {
+                "nw": (left_px, top_px),
+                "ne": (right_px, top_px),
+                "sw": (left_px, bottom_px),
+                "se": (right_px, bottom_px),
+            }
+            fill_color = "#3498db"
+        else:
+            corners = {
+                "nw": (cx - hw, cy - hh),
+                "ne": (cx + hw, cy - hh),
+                "sw": (cx - hw, cy + hh),
+                "se": (cx + hw, cy + hh),
+            }
+            fill_color = "#2ecc71"
 
         hs = HANDLE_SIZE
         for cid, (hx, hy) in corners.items():
             self._canvas.create_rectangle(
                 hx - hs, hy - hs, hx + hs, hy + hs,
-                fill="#2ecc71", outline="#ffffff", width=1,
+                fill=fill_color, outline="#ffffff", width=1,
                 tags=("handle", f"handle_{cid}"),
             )
             self._handle_positions[cid] = (hx, hy)
@@ -370,9 +416,12 @@ class PreviewPanel(ctk.CTkFrame):
         self._drag_start_y    = event.y
         page = self.controller.current_page
         if page:
-            self._drag_start_scale = page.image_scale
-            self._drag_start_ox    = page.image_offset_x
-            self._drag_start_oy    = page.image_offset_y
+            if self.controller.editor_mode == "crop" and self._temp_crop:
+                self._drag_start_crop = self._temp_crop
+            else:
+                self._drag_start_scale = page.image_scale
+                self._drag_start_ox    = page.image_offset_x
+                self._drag_start_oy    = page.image_offset_y
 
     def _on_mouse_drag(self, event: tk.Event) -> None:
         if not self._drag_corner:
@@ -380,6 +429,27 @@ class PreviewPanel(ctk.CTkFrame):
         page = self.controller.current_page
         idx  = self.controller.current_index
         if not page or not page.is_image or idx < 0:
+            return
+
+        if self.controller.editor_mode == "crop" and getattr(self, "_drag_start_crop", None):
+            dx = event.x - self._drag_start_x
+            dy = event.y - self._drag_start_y
+            dx_pct = dx / max(1, self._img_disp_w)
+            dy_pct = dy / max(1, self._img_disp_h)
+
+            l, t, r, b = self._drag_start_crop
+            if "n" in self._drag_corner: t += dy_pct
+            if "s" in self._drag_corner: b += dy_pct
+            if "w" in self._drag_corner: l += dx_pct
+            if "e" in self._drag_corner: r += dx_pct
+
+            l = max(0.0, min(r - 0.05, l))
+            t = max(0.0, min(b - 0.05, t))
+            r = max(l + 0.05, min(1.0, r))
+            b = max(t + 0.05, min(1.0, b))
+
+            self._temp_crop = (l, t, r, b)
+            self._draw_handles()
             return
 
         # Distance from image centre at drag start vs now

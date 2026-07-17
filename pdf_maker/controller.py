@@ -9,6 +9,7 @@ import os
 import tempfile
 import threading
 import uuid
+import dataclasses
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -28,6 +29,8 @@ EVT_PROGRESS         = "progress"
 EVT_STATUS           = "status"
 EVT_RESET            = "reset"
 EVT_WARNINGS         = "warnings"
+EVT_MODE_CHANGED     = "mode_changed"
+EVT_APPLY_CROP       = "apply_crop"
 
 
 class AppController:
@@ -42,9 +45,14 @@ class AppController:
         self.settings:       SettingsManager    = settings
         self.pages:          list[PageItem]     = []
         self.current_index:  int                = -1
+        self.editor_mode:    str                = "resize"  # "resize" | "crop"
         self._listeners:     dict[str, list[Callable]] = {}
         self._temp_dir:      str                = tempfile.mkdtemp(prefix="pdfmaker_")
         self._lock                              = threading.Lock()
+        
+        # Single-level undo for page actions (resize, crop)
+        self._last_action_index: int | None = None
+        self._last_action_state: PageItem | None = None
 
     # ------------------------------------------------------------------ #
     # Event bus
@@ -271,10 +279,46 @@ class AppController:
         if 0 <= index < len(self.pages):
             page = self.pages[index]
             if page.is_image:
+                self._save_undo_state(index)
                 page.image_scale    = max(0.05, min(10.0, scale))
                 page.image_offset_x = offset_x
                 page.image_offset_y = offset_y
                 self.emit(EVT_PAGE_ROTATED, index)  # trigger preview re-render
+
+    def set_image_crop(self, index: int, crop: tuple[float, float, float, float] | None) -> None:
+        """Set the crop box (left, top, right, bottom percentages) for an image page."""
+        if 0 <= index < len(self.pages):
+            page = self.pages[index]
+            if page.is_image:
+                self._save_undo_state(index)
+                page.image_crop = crop
+                self.emit(EVT_PAGE_ROTATED, index)
+
+    def _save_undo_state(self, index: int) -> None:
+        """Save the state of a page before an action so it can be undone."""
+        if 0 <= index < len(self.pages):
+            self._last_action_index = index
+            self._last_action_state = dataclasses.replace(self.pages[index])
+
+    def undo_last_action(self) -> None:
+        """Restore the last saved page state."""
+        idx = self._last_action_index
+        if idx is not None and 0 <= idx < len(self.pages):
+            # Only restore if the ID matches (in case pages were moved/deleted)
+            if self.pages[idx].id == self._last_action_state.id:
+                self.pages[idx] = dataclasses.replace(self._last_action_state)
+                # Clear undo state so it can't be repeatedly triggered
+                self._last_action_index = None
+                self._last_action_state = None
+                self.emit(EVT_PAGE_ROTATED, idx)
+                self.emit(EVT_PAGES_CHANGED, None)
+
+    def set_editor_mode(self, mode: str) -> None:
+        """Set mode ('resize' or 'crop') and notify."""
+        if mode in ("resize", "crop") and self.editor_mode != mode:
+            self.editor_mode = mode
+            self.emit(EVT_MODE_CHANGED, mode)
+
 
 
     # ------------------------------------------------------------------ #
