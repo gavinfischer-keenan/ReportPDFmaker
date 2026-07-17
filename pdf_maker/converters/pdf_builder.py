@@ -370,8 +370,20 @@ def _draw_page_number_pil(
     return img
 
 
-def _add_image_page(item: PageItem, out_doc: fitz.Document, page_size: str = "A4") -> None:
-    """Render an image PageItem and append it to out_doc at full quality."""
+def _add_image_page(
+    item: PageItem,
+    out_doc: fitz.Document,
+    page_size: str = "A4",
+    jpeg_quality: int = 95,
+) -> None:
+    """Render an image PageItem and append it to out_doc.
+
+    Parameters
+    ----------
+    jpeg_quality : JPEG quality for the embedded image (1-95).
+                  95 = archival quality (default).
+                  75 = Standard compression (Adobe/Quartz equivalent).
+    """
     pw_pt, ph_pt = _page_dims(item.page_landscape, page_size)
 
     # Render at 2× for good print quality
@@ -380,7 +392,7 @@ def _add_image_page(item: PageItem, out_doc: fitz.Document, page_size: str = "A4
 
     out_page = out_doc.new_page(width=pw_pt, height=ph_pt)
     buf = io.BytesIO()
-    pil_img.save(buf, format="JPEG", quality=95)
+    pil_img.save(buf, format="JPEG", quality=jpeg_quality)
     out_page.insert_image(fitz.Rect(0, 0, pw_pt, ph_pt), stream=buf.getvalue())
 
 
@@ -390,7 +402,18 @@ def build_pdf(
     page_number_settings: Optional[dict] = None,
     progress_callback=None,
     page_size: str = "A4",
+    jpeg_quality: int = 95,
 ) -> tuple[bool, str]:
+    """
+    Assemble pages into a PDF file.
+
+    Parameters
+    ----------
+    jpeg_quality : JPEG quality for image pages (1–95).
+                  95 = archival quality (default).
+                  75 = Standard compression equivalent (Adobe / Quartz).
+                  Lower values = smaller file, more visible quality loss.
+    """
     if not pages:
         return False, "No pages to assemble."
 
@@ -402,7 +425,7 @@ def build_pdf(
             progress_callback(i, total, f"Processing page {i + 1} of {total}…")
         try:
             if item.is_image:
-                _add_image_page(item, out_doc, page_size)
+                _add_image_page(item, out_doc, page_size, jpeg_quality=jpeg_quality)
             else:
                 src = fitz.open(item.converted_pdf)
                 if len(src) == 0:
@@ -429,7 +452,16 @@ def build_pdf(
 
     try:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        out_doc.save(output_path, garbage=4, deflate=True)
+        # Use full compression when optimising for file size
+        _compressing = jpeg_quality < 95
+        out_doc.save(
+            output_path,
+            garbage=4,
+            deflate=True,
+            deflate_images=_compressing,
+            deflate_fonts=_compressing,
+            clean=_compressing,
+        )
         out_doc.close()
         return True, ""
     except Exception as e:
