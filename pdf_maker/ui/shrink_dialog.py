@@ -80,7 +80,12 @@ class ShrinkPDFDialog(ctk.CTkToplevel):
             text_color="white",
         ).pack(pady=12, padx=PAD)
 
-        body = ctk.CTkFrame(self, fg_color="transparent")
+        # ── Scrollable body — expands to fill available height ────── #
+        body = ctk.CTkScrollableFrame(
+            self,
+            fg_color="transparent",
+            scrollbar_button_color=("gray70", "gray40"),
+        )
         body.pack(fill="both", expand=True, padx=PAD, pady=(PAD, 0))
 
         # ── Input file ─────────────────────────────────────────────── #
@@ -413,9 +418,24 @@ class ShrinkPDFDialog(ctk.CTkToplevel):
 
     def _center_on_parent(self, parent: ctk.CTk) -> None:
         self.update_idletasks()
-        w, h   = 500, self.winfo_reqheight()
+        w = 500
+
+        # Maximum usable screen height (leave room for taskbar + window chrome)
+        screen_h  = self.winfo_screenheight()
+        max_h     = screen_h - 80
+
+        # Desired height: content size, but never shorter than 500 or taller than screen
+        desired_h = self.winfo_reqheight()
+        h         = max(500, min(desired_h, max_h))
+
+        # Center over parent, then clamp so the dialog stays on-screen
         px, py = parent.winfo_x(), parent.winfo_y()
         pw, ph = parent.winfo_width(), parent.winfo_height()
         x = px + (pw - w) // 2
         y = py + (ph - h) // 2
-        self.geometry(f"{w}x{max(h, 620)}+{x}+{y}")
+
+        # Clamp: don't let the top go above 40px (allow for title bar) or
+        # the bottom go off the bottom of the screen
+        y = max(40, min(y, screen_h - h - 40))
+
+        self.geometry(f"{w}x{h}+{x}+{y}")
