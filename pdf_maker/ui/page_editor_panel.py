@@ -297,6 +297,8 @@ class PageEditorPanel(ctk.CTkFrame):
     def _update_state(self) -> None:
         idx = self.controller.current_index
         page = self.controller.current_page
+        total = self.controller.page_count
+        has_pg = page is not None
         
         # Mode & Action visibility
         is_image = bool(page and page.is_image)
