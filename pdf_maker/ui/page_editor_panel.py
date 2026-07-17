@@ -336,16 +336,16 @@ class PageEditorPanel(ctk.CTkFrame):
             self._info_label.configure(text="No page selected")
 
         # Rotation buttons — highlight active degree (image_rotation for images)
-        active_rot = page.image_rotation if is_img else (page.rotation if page else 0)
+        active_rot = page.image_rotation if is_image else (page.rotation if page else 0)
         for deg, btn in self._rot_buttons.items():
-            active = has_pg and active_rot == deg
+            active = bool(page) and active_rot == deg
             btn.configure(
                 fg_color=BTN_ACTIVE if active else BTN_NORMAL,
                 text_color=BTN_ACTIVE_T if active else BTN_NORMAL_T,
             )
 
         # Orientation buttons
-        if has_pg:
+        if page:
             is_land = page.page_landscape
             self._portrait_btn.configure(
                 fg_color=BTN_ACTIVE if not is_land else BTN_NORMAL,
