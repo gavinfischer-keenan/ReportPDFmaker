@@ -64,9 +64,6 @@ class MainWindow(ctk.CTk):
     def _setup_window(self) -> None:
         self.title("PDF Maker")
         self.minsize(960, 620)
-        w = self.settings.get("window_width",  1280)
-        h = self.settings.get("window_height", 800)
-        self.geometry(f"{w}x{h}")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # App icon (cross-platform emoji fallback)
@@ -76,17 +73,34 @@ class MainWindow(ctk.CTk):
             pass
 
     def _restore_window_state(self) -> None:
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+
+        saved_w = self.settings.get("window_width",  1280)
+        saved_h = self.settings.get("window_height", 800)
+        w = max(960, min(saved_w, max(960, sw - 80)))
+        h = max(620, min(saved_h, max(620, sh - 100)))
+
         x = self.settings.get("window_x", -1)
         y = self.settings.get("window_y", -1)
-        if x >= 0 and y >= 0:
-            self.geometry(f"+{x}+{y}")
+
+        # Validate that (x, y) is actually visible on the screen
+        if 0 <= x < (sw - 100) and 0 <= y < (sh - 100):
+            self.geometry(f"{w}x{h}+{x}+{y}")
         else:
-            self.update_idletasks()
-            sw = self.winfo_screenwidth()
-            sh = self.winfo_screenheight()
-            ww = self.winfo_width()
-            wh = self.winfo_height()
-            self.geometry(f"+{(sw - ww) // 2}+{(sh - wh) // 2}")
+            cx = max(0, (sw - w) // 2)
+            cy = max(0, (sh - h) // 2)
+            self.geometry(f"{w}x{h}+{cx}+{cy}")
+
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        try:
+            self.attributes("-topmost", True)
+            self.after(200, lambda: self.attributes("-topmost", False))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # UI Construction
