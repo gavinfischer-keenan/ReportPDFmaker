@@ -102,6 +102,16 @@ class MainWindow(ctk.CTk):
         except Exception:
             pass
 
+        try:
+            import win32gui
+            import win32con
+            hwnd = self.winfo_id()
+            top_hwnd = win32gui.GetParent(hwnd) or hwnd
+            win32gui.ShowWindow(top_hwnd, win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(top_hwnd)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------ #
     # UI Construction
     # ------------------------------------------------------------------ #
