@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper Nautilus · PDF Maker</title>
+  <meta name="description" content="100% Client-side web application for creating, combining, and editing multi-format files into single PDFs.">
+  <link rel="stylesheet" href="css/styles.css">
+
+  <!-- Self-contained Client-Side Vendor Dependencies -->
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="vendor/mammoth.browser.min.js"></script>
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/GLTFLoader.js"></script>
+  <script src="vendor/OrbitControls.js"></script>
+</head>
+<body>
+
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="brand">
+      <img class="brand-logo" src="assets/paper-nautilus-logo.jpg" alt="">
+      <h1>Paper Nautilus</h1>
+      <span class="brand-badge">PDF Maker · Web Edition</span><a class="home-link" href="https://pdfmaker.11mosswood.us/">← TripoFisch</a>
+    </div>
+
+    <div class="header-actions">
+      <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.svg,.pdf,.docx,.txt,.md,.csv,.gltf,.glb" class="hidden">
+      
+      <button id="btn-add-files" class="btn btn-secondary">
+        <span>➕</span> Add Files
+      </button>
+
+      <button id="btn-shrink-pdf" class="btn btn-secondary" title="Compress or shrink an existing PDF file">
+        <span>🗜️</span> Shrink PDF
+      </button>
+
+      <button id="btn-clear-all" class="btn btn-secondary btn-sm" title="Clear all pages">
+        <span>🗑️</span> Clear
+      </button>
+
+      <button id="theme-toggle" class="btn btn-secondary btn-sm" title="Toggle Dark/Light Mode">
+        ☀️
+      </button>
+
+      <button id="btn-export-pdf" class="btn btn-primary">
+        <span>💾</span> Download PDF
+      </button>
+    </div>
+  </header>
+
+  <p class="local-processing-note">Your files are processed on this device. No document uploads. <a href="vendor/THIRD-PARTY-NOTICES.txt">Third-party notices</a></p>
+  <!-- Animated Import Progress Bar -->
+  <div id="import-progress-container" class="import-progress-banner hidden">
+    <div id="import-progress-fill" class="progress-fill"></div>
+    <div id="import-progress-text" class="progress-text">Importing…</div>
+  </div>
+
+  <!-- Main 3-Column Workspace -->
+  <main class="app-workspace">
+
+    <!-- Left Column: Document Pages Queue -->
+    <aside class="pages-panel">
+      <div class="panel-header">
+        <span class="panel-title">Document Pages</span>
+        <span id="page-count-badge" class="badge badge-image">0 pages</span>
+      </div>
+
+      <div id="drop-zone" class="drop-zone-mini">
+        <div class="drop-zone-icon">📥</div>
+        <div class="drop-zone-text">Drop files here</div>
+        <div class="drop-zone-sub">Images, PDF, Word DOCX, Text, 3D</div>
+      </div>
+
+      <div id="pages-list" class="pages-list-container">
+        <!-- Dynamically rendered Page Cards -->
+      </div>
+    </aside>
+
+    <!-- Center Column: Live Interactive Canvas Preview -->
+    <section class="preview-panel">
+      <div class="preview-toolbar">
+        <div class="preview-nav">
+          <button id="btn-prev-page" class="btn btn-secondary btn-sm" title="Previous page">◀</button>
+          <span id="page-indicator" class="page-indicator">0 / 0</span>
+          <button id="btn-next-page" class="btn btn-secondary btn-sm" title="Next page">▶</button>
+        </div>
+
+        <div class="preview-zoom">
+          <button id="btn-zoom-out" class="btn btn-secondary btn-sm" title="Zoom out">−</button>
+          <span id="zoom-level-label" class="zoom-level">80%</span>
+          <button id="btn-zoom-in" class="btn btn-secondary btn-sm" title="Zoom in">+</button>
+          <button id="btn-zoom-fit" class="btn btn-secondary btn-sm" title="Fit to page">Fit</button>
+        </div>
+      </div>
+
+      <div id="canvas-container" class="canvas-container">
+        <!-- Interactive Canvas will be mounted here -->
+      </div>
+    </section>
+
+    <!-- Right Column: Page Editor & Settings -->
+    <aside class="editor-panel">
+      <div class="panel-header">
+        <span class="panel-title">Page & Document Editor</span>
+      </div>
+
+      <div id="empty-editor-message" class="empty-state">
+        <p>No page selected.</p>
+        <p class="text-muted" style="margin-top: 0.5rem;">Add files or click a page from the left panel to edit its orientation, rotation, or scale.</p>
+      </div>
+
+      <div id="page-editor-controls" class="editor-content hidden">
+
+        <!-- Page Orientation -->
+        <div class="editor-section">
+          <span class="section-label">Page Orientation</span>
+          <div class="button-group-duo">
+            <label class="radio-card">
+              <input type="radio" name="page-orientation" id="orient-portrait" value="portrait" checked>
+              <span>📄 Portrait</span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="page-orientation" id="orient-landscape" value="landscape">
+              <span>📄 Landscape</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Image Content Rotation -->
+        <div class="editor-section">
+          <span class="section-label">Rotate Image Content</span>
+          <div class="button-group-grid">
+            <button id="btn-rotate-0" class="btn btn-secondary btn-sm">0°</button>
+            <button id="btn-rotate-90" class="btn btn-secondary btn-sm">+90°</button>
+            <button id="btn-rotate-180" class="btn btn-secondary btn-sm">180°</button>
+            <button id="btn-rotate-270" class="btn btn-secondary btn-sm">270°</button>
+          </div>
+        </div>
+
+        <!-- Scale & Geometry -->
+        <div class="editor-section">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="section-label">Image Scale</span>
+            <button id="btn-fit-scale" class="btn btn-secondary btn-sm" style="font-size:0.65rem;">Reset / Fit</button>
+          </div>
+          <div class="slider-row">
+            <input type="range" id="scale-slider" min="10" max="300" value="100">
+            <span id="scale-value-label" class="slider-value">100%</span>
+          </div>
+          <p class="text-muted" style="font-size: 0.7rem;">
+            Tip: You can also drag the <strong>green corner handles</strong> directly on the canvas to resize, and drag inside to move.
+          </p>
+        </div>
+
+        <!-- Page Actions -->
+        <div class="editor-section">
+          <span class="section-label">Page Order</span>
+          <div class="button-group-duo">
+            <button id="btn-move-up" class="btn btn-secondary btn-sm">▲ Move Up</button>
+            <button id="btn-move-down" class="btn btn-secondary btn-sm">▼ Move Down</button>
+          </div>
+          <button id="btn-delete-page" class="btn btn-danger btn-sm" style="margin-top: 0.3rem;">🗑️ Delete Page</button>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color);">
+
+        <!-- Page Numbering Configuration -->
+        <div class="editor-section">
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <input type="checkbox" id="chk-page-numbers">
+            <label for="chk-page-numbers" style="font-size:0.85rem; font-weight:600; cursor:pointer;">
+              Enable Page Numbers
+            </label>
+          </div>
+
+          <div id="page-numbers-config" class="hidden" style="display:flex; flex-direction:column; gap:0.6rem; margin-top:0.4rem;">
+            <div class="form-group">
+              <label class="form-label">Position</label>
+              <select id="num-position" class="form-select">
+                <option value="bottom">Bottom of page</option>
+                <option value="top">Top of page</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Alignment</label>
+              <select id="num-alignment" class="form-select">
+                <option value="center">Center</option>
+                <option value="right">Right</option>
+                <option value="left">Left</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Style</label>
+              <select id="num-style" class="form-select">
+                <option value="plain">1, 2, 3</option>
+                <option value="dashes">— 1 —, — 2 —</option>
+                <option value="page_x">Page 1, Page 2</option>
+                <option value="page_x_of_y">Page 1 of N</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Font Family & Size</label>
+              <div style="display:flex; gap:0.5rem;">
+                <select id="num-font" class="form-select" style="flex:1;">
+                  <option value="Helvetica">Helvetica</option>
+                  <option value="Helvetica-Bold">Helvetica Bold</option>
+                  <option value="Times-Roman">Times New Roman</option>
+                  <option value="Times-Bold">Times Bold</option>
+                  <option value="Courier">Courier</option>
+                  <option value="Courier-Bold">Courier Bold</option>
+                </select>
+                <input type="number" id="num-size" class="form-input" min="6" max="36" value="10" style="width:60px;">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Color</label>
+              <div class="color-picker-row">
+                <input type="color" id="num-color" class="form-color" value="#1e293b">
+                <span style="font-size:0.75rem; color:var(--text-muted);">Text color</span>
+              </div>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:0.4rem; margin-top:0.2rem;">
+              <input type="checkbox" id="chk-skip-cover">
+              <label for="chk-skip-cover" style="font-size:0.75rem; color:var(--text-secondary); cursor:pointer;">
+                Skip numbering first page (Cover)
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color);">
+
+        <!-- Document Global Settings -->
+        <div class="editor-section">
+          <span class="section-label">Document Settings</span>
+
+          <div class="form-group">
+            <label class="form-label">Page Size</label>
+            <select id="doc-page-size" class="form-select">
+              <option value="A4">A4 (210 × 297 mm)</option>
+              <option value="Letter">US Letter (8.5 × 11 in)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Output Filename</label>
+            <input type="text" id="doc-filename" class="form-input" value="Report.pdf">
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- Modal: Shrink / Compress PDF Tool -->
+  <div id="modal-shrink" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>🗜️ Shrink a PDF</h2>
+        <button id="btn-close-shrink" class="btn-close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <input type="file" id="shrink-file-input" accept=".pdf" class="hidden">
+        
+        <div id="shrink-drop-zone" class="drop-zone-mini">
+          <div class="drop-zone-icon">📄</div>
+          <div class="drop-zone-text">Click or drag a PDF here to compress</div>
+          <div class="drop-zone-sub">Reduces PDF size 100% inside your browser</div>
+        </div>
+
+        <div id="shrink-file-details" class="hidden" style="background:var(--bg-primary); padding:0.75rem; border-radius:var(--radius); border:1px solid var(--border-color);">
+          <div style="font-weight:600; font-size:0.85rem;" id="shrink-file-name">file.pdf</div>
+          <div style="font-size:0.75rem; color:var(--text-muted);" id="shrink-file-size">0 KB</div>
+        </div>
+
+        <div class="editor-section">
+          <span class="section-label">Select Compression Level</span>
+          <div class="compression-options">
+            <label class="compression-card">
+              <input type="radio" name="shrink-level" value="light">
+              <strong>Light</strong>
+              <span>Lossless & high resolution</span>
+            </label>
+            <label class="compression-card">
+              <input type="radio" name="shrink-level" value="standard" checked>
+              <strong>Standard</strong>
+              <span>Recommended (150 DPI)</span>
+            </label>
+            <label class="compression-card">
+              <input type="radio" name="shrink-level" value="aggressive">
+              <strong>Aggressive</strong>
+              <span>Smallest file size (96 DPI)</span>
+            </label>
+            <label class="compression-card">
+              <input type="radio" name="shrink-level" value="grayscale">
+              <strong>Grayscale</strong>
+              <span>Black & White document</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="shrink-progress" class="hidden" style="display:flex; flex-direction:column; gap:0.4rem;">
+          <div style="height:8px; background:var(--bg-tertiary); border-radius:4px; overflow:hidden;">
+            <div id="shrink-progress-bar" style="height:100%; width:0%; background:var(--accent-color); transition:width 0.2s;"></div>
+          </div>
+          <span id="shrink-progress-text" style="font-size:0.75rem; color:var(--text-muted); text-align:center;">Compressing…</span>
+        </div>
+
+        <div id="shrink-result" class="hidden shrink-result-box">
+          <div id="shrink-result-details"></div>
+          <button id="btn-download-shrunk" class="btn btn-primary btn-sm" style="margin-top:0.4rem;">
+            💾 Download Compressed PDF
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-start-compress" class="btn btn-primary" disabled>
+          Start Compression
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: 3D Model Viewer & Page Capturer -->
+  <div id="modal-3d" class="modal-overlay hidden">
+    <div class="modal-box" style="max-width: 720px;">
+      <div class="modal-header">
+        <h2>📦 3D Model Page Snapshot</h2>
+        <button id="btn-close-3d" class="btn-close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p style="font-size: 0.8rem; color: var(--text-secondary);">
+          Rotate and zoom the 3D model with your mouse to your desired perspective, then click <strong>Capture to Page</strong>.
+        </p>
+        <div id="three-container" class="three-canvas-wrap"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-capture-3d" class="btn btn-primary">
+          📸 Capture to Page
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Entrypoint -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

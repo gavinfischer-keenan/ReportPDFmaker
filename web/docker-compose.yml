@@ -1,0 +1,9 @@
+services:
+  reportpdfmaker-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reportpdfmaker-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"

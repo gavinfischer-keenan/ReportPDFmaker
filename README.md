@@ -179,3 +179,8 @@ Built with:
 - [Pillow](https://python-pillow.org/) — image processing
 - [ReportLab](https://www.reportlab.com/) — PDF generation
 - [python-docx](https://python-docx.readthedocs.io/) — Word document reading
+
+
+## Web Edition — Paper Nautilus
+
+A client-side browser edition is in `web/`, published at https://pdfmaker.11mosswood.us/app/. No documents are uploaded. See [web/DEPLOYMENT.md](web/DEPLOYMENT.md) for static hosting, supported-format limits, and developer regression checks. The Windows desktop application remains available as described above.

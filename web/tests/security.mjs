@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';import {createRequire} from 'node:module';import {fileURLToPath} from 'node:url';
+const require=createRequire(import.meta.url);
+const {escapeHtml}=await import('../js/html-utils.js');
+assert.equal(escapeHtml('A & B <draft> "x" \'y\''),'A &amp; B &lt;draft&gt; &quot;x&quot; &#39;y&#39;');
+assert(!escapeHtml('<img src=x onerror=alert(1)>').includes('<img'));
+globalThis.localStorage={getItem:()=>null,setItem:()=>{}};globalThis.window={PDFLib:require('../vendor/pdf-lib.min.js')};
+const {state,PageItem}=await import('../js/state.js');const {buildPdfDocument}=await import('../js/pdf-builder.js');
+const {PDFDocument}=window.PDFLib;const source=await PDFDocument.create();source.addPage([200,300]);source.addPage([400,500]);const bytes=await source.save();
+state.addPages([new PageItem({sourceType:'pdf',pdfBytes:bytes,pdfPageIndex:1}),new PageItem({sourceType:'pdf',pdfBytes:bytes,pdfPageIndex:0})]);state.settings.pageNumbers=true;state.settings.pageNumberStyle='page_x_of_y';
+const output=await buildPdfDocument();const result=await PDFDocument.load(output);assert.equal(result.getPageCount(),2);assert.equal(result.getPage(0).getWidth(),400);assert.equal(result.getPage(1).getWidth(),200);
+for(const f of ['converters.js','pdf-compressor.js'])assert(fs.readFileSync(new URL('../js/'+f,import.meta.url),'utf8').includes('isEvalSupported: false'));
+console.log('PASS: filename injection escaping, synthetic PDF merge/reorder/page-number build, and disabled PDF.js eval.');
