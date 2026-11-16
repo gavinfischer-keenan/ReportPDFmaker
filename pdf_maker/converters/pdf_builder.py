@@ -166,12 +166,46 @@ def _render_image_to_pil(
     return page_img
 
 
+def get_source_image_dimensions(
+    page_item: PageItem,
+    apply_crop: bool = False,
+) -> Optional[tuple[int, int]]:
+    """
+    Return effective (width, height) of a PageItem's source image in O(1)
+    by reading only the image header and EXIF orientation tag without decoding pixels.
+    """
+    try:
+        with Image.open(page_item.source_file) as img:
+            w, h = img.size
+            try:
+                exif = img.getexif()
+                orientation = exif.get(0x0112, 1) if exif else 1
+                if orientation in (5, 6, 7, 8):
+                    w, h = h, w
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[PDFBuilder] Cannot read image dimensions {page_item.source_file}: {e}")
+        return None
+
+    if (page_item.image_rotation or 0) % 180 != 0:
+        w, h = h, w
+
+    if apply_crop and page_item.image_crop:
+        l, t, r, b = page_item.image_crop
+        w = max(1, int(w * max(0.01, r - l)))
+        h = max(1, int(h * max(0.01, b - t)))
+
+    return (w, h)
+
+
 def get_image_canvas_bounds(
     page_item: PageItem,
     canvas_w: int,
     canvas_h: int,
     zoom: float = 1.0,
     page_size: str = "A4",
+    ignore_crop: bool = False,
 ) -> Optional[tuple[int, int, int, int]]:
     """
     Return (cx, cy, img_w_px, img_h_px) for the image within the canvas.
@@ -185,14 +219,11 @@ def get_image_canvas_bounds(
     if not page_item.is_image:
         return None
 
-    try:
-        src = _load_source_image(page_item)
-        if src is None:
-            return None
-        if page_item.image_rotation:
-            src = src.rotate(-page_item.image_rotation, expand=True)
-        img_w, img_h = src.size
-    except Exception:
+    dims = get_source_image_dimensions(page_item, apply_crop=not ignore_crop)
+    if dims is None:
+        return None
+    img_w, img_h = dims
+    if img_w <= 0 or img_h <= 0:
         return None
 
     pw_pt, ph_pt = _page_dims(page_item.page_landscape, page_size)
@@ -200,7 +231,8 @@ def get_image_canvas_bounds(
     ph_px = int(ph_pt * zoom)
 
     fit_scale = min(pw_px / img_w, ph_px / img_h)
-    final_scale = fit_scale * page_item.image_scale
+    eff_scale = 1.0 if ignore_crop else page_item.image_scale
+    final_scale = fit_scale * eff_scale
 
     scaled_w = max(1, int(img_w * final_scale))
     scaled_h = max(1, int(img_h * final_scale))
@@ -210,8 +242,10 @@ def get_image_canvas_bounds(
     page_canvas_y = max(canvas_h // 2, ph_px // 2 + 10)
 
     # Image centre within the page (in canvas coords)
-    img_cx = page_canvas_x + int(page_item.image_offset_x * zoom)
-    img_cy = page_canvas_y + int(page_item.image_offset_y * zoom)
+    eff_ox = 0.0 if ignore_crop else page_item.image_offset_x
+    eff_oy = 0.0 if ignore_crop else page_item.image_offset_y
+    img_cx = page_canvas_x + int(eff_ox * zoom)
+    img_cy = page_canvas_y + int(eff_oy * zoom)
 
     # Clamp to displayed width (image may be clipped)
     displayed_w = min(scaled_w, pw_px)
@@ -250,12 +284,17 @@ def _hex_to_fitz_color(hex_color: str) -> tuple[float, float, float]:
 
 
 def _insert_page_number(page: fitz.Page, page_num: int, total: int, s: dict) -> None:
+    if page_num == 1 and s.get("skip_cover_page", False):
+        return
     fitz_font = FONT_MAP.get(s.get("font", "Helvetica"), "helv")
     font_size = float(s.get("font_size", 10))
     color     = _hex_to_fitz_color(s.get("color", "#000000"))
     text      = _format_page_number(page_num, total, s.get("style", "plain"))
     pw, ph    = page.rect.width, page.rect.height
-    text_w    = len(text) * font_size * 0.55
+    try:
+        text_w = fitz.get_text_length(text, fontname=fitz_font, fontsize=font_size)
+    except Exception:
+        text_w = len(text) * font_size * 0.55
 
     y = ph - float(s.get("offset_from_edge", 20)) if s.get("position", "bottom") == "bottom" \
         else float(s.get("offset_from_edge", 20)) + font_size
@@ -328,6 +367,9 @@ def _draw_page_number_pil(
     as _insert_page_number (fitz version used in the final PDF).
     """
     from PIL import ImageDraw
+
+    if page_num == 1 and settings.get("skip_cover_page", False):
+        return img
 
     text      = _format_page_number(page_num, total, settings.get("style", "plain"))
     font_name = settings.get("font", "Helvetica")

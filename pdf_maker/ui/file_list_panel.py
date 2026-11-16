@@ -38,14 +38,17 @@ NORMAL_BG       = "transparent"
 class FileListPanel(ctk.CTkFrame):
     """Scrollable page list with selection highlight and manipulation controls."""
 
-    def __init__(self, parent, controller: "AppController"):
+    def __init__(self, parent, controller: "AppController", on_add_files=None):
         super().__init__(parent, corner_radius=8, border_width=1)
         self.controller = controller
+        self._on_add_files = on_add_files
         self._row_frames: list[ctk.CTkFrame] = []
+        self._empty_frame: Optional[ctk.CTkFrame] = None
         self._selected_index: int = -1
 
         self._build_ui()
         self._register_events()
+        self._refresh()
 
     # ------------------------------------------------------------------ #
     # Layout
@@ -112,11 +115,20 @@ class FileListPanel(ctk.CTkFrame):
         for frame in self._row_frames:
             frame.destroy()
         self._row_frames.clear()
+        if self._empty_frame is not None:
+            self._empty_frame.destroy()
+            self._empty_frame = None
 
         pages = self.controller.pages
         self._page_count_label.configure(
             text=f"{len(pages)} page{'s' if len(pages) != 1 else ''}"
         )
+
+        if not pages:
+            self._empty_frame = self._build_empty_state()
+            self._empty_frame.pack(fill="x", padx=6, pady=18)
+            self._highlight(-1)
+            return
 
         for idx, page in enumerate(pages):
             row = self._build_row(idx, page)
@@ -124,6 +136,37 @@ class FileListPanel(ctk.CTkFrame):
             self._row_frames.append(row)
 
         self._highlight(self.controller.current_index)
+
+    def _build_empty_state(self) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(
+            self._scroll_frame,
+            fg_color=("gray90", "#182235"),
+            corner_radius=8,
+            border_width=1,
+            border_color=("gray78", "gray30"),
+        )
+        ctk.CTkLabel(
+            card,
+            text="📑 Document Queue Empty",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(pady=(14, 4), padx=10)
+        ctk.CTkLabel(
+            card,
+            text="Add images, PDFs, Word docs, or text files to reorder and assemble into one PDF.",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=175,
+            justify="center",
+        ).pack(pady=(0, 10), padx=10)
+        if self._on_add_files:
+            ctk.CTkButton(
+                card,
+                text="➕  Add Files",
+                height=30,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=self._on_add_files,
+            ).pack(pady=(0, 14), padx=14, fill="x")
+        return card
 
     def _build_row(self, idx: int, page) -> ctk.CTkFrame:
         """Build one row — no border by default, green border when selected."""

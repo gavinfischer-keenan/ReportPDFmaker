@@ -334,6 +334,7 @@ class AppController:
     ) -> None:
         pages_snapshot = list(self.pages)
         pn_settings    = self.settings.get_page_number_settings()
+        page_size      = self.settings.get("page_size", "A4")
         _quality       = jpeg_quality
 
         def _worker():
@@ -342,6 +343,7 @@ class AppController:
                 output_path=output_path,
                 page_number_settings=pn_settings,
                 progress_callback=progress_callback,
+                page_size=page_size,
                 jpeg_quality=_quality,
             )
             if done_callback:
@@ -355,7 +357,11 @@ class AppController:
 
     def render_page(self, index: int, zoom: float = 1.0) -> Optional[bytes]:
         if 0 <= index < len(self.pages):
-            return render_page_preview(self.pages[index], zoom)
+            return render_page_preview(
+                self.pages[index],
+                zoom,
+                page_size=self.settings.get("page_size", "A4"),
+            )
         return None
 
     # ------------------------------------------------------------------ #

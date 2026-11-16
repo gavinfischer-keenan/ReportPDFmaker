@@ -9,6 +9,7 @@ Detection result is cached so the check only runs once per session.
 """
 
 import os
+import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -83,6 +84,7 @@ def convert_docx_to_pages(
     # Attempt 1: docx2pdf (Word COM automation)
     # ------------------------------------------------------------------ #
     if word_available:
+        tmp_dir = None
         try:
             from docx2pdf import convert as docx2pdf_convert
 
@@ -91,13 +93,16 @@ def convert_docx_to_pages(
             docx2pdf_convert(docx_path, out_pdf)
 
             if os.path.isfile(out_pdf) and os.path.getsize(out_pdf) > 0:
-                from .text_converter import _split_pdf_to_pages
-                pages = _split_pdf_to_pages(out_pdf, cleanup_source=True)
+                from .pdf_handler import split_pdf_to_pages
+                pages = split_pdf_to_pages(out_pdf, cleanup_source=True)
                 return pages, warnings
 
             warnings.append("⚠️ docx2pdf produced an empty file — falling back to text extraction.")
         except Exception as e:
             warnings.append(f"⚠️ Word conversion error: {e}. Falling back to text extraction.")
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------ #
     # Attempt 2: python-docx text extraction → ReportLab

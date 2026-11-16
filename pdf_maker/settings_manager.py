@@ -27,6 +27,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "page_number_offset_from_side": 50,  # Points from left/right edge (for left/right align)
     "page_number_style": "plain",        # "plain"=1, "dashes"=— 1 —, "page_x"=Page 1, "page_x_of_y"=Page 1 of N
     "page_number_color": "#000000",
+    "skip_cover_page": False,
 
     # Appearance
     "theme": "dark",             # "dark" | "light" | "system"
@@ -42,6 +43,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "default_rotation": 0,
     "auto_preview": True,        # Auto-refresh preview when pages change
     "confirm_reset": True,       # Ask for confirmation before reset
+    "optimize_file_size": False, # Default JPEG quality 95 vs 75
     "word_available": None,      # None = not yet checked; True/False = result of check
 }
 
@@ -137,6 +139,7 @@ class SettingsManager:
             "offset_from_side": self.get("page_number_offset_from_side"),
             "style": self.get("page_number_style"),
             "color": self.get("page_number_color"),
+            "skip_cover_page": self.get("skip_cover_page", False),
         }
 
     @property
@@ -155,3 +158,32 @@ class SettingsManager:
     @property
     def settings_file_path(self) -> str:
         return str(self._settings_file)
+
+
+SETTING_LABELS: dict[str, str] = {
+    "page_size": "Page Size",
+    "page_numbers": "Page Numbers",
+    "page_number_position": "Position",
+    "page_number_alignment": "Alignment",
+    "page_number_style": "Number Style",
+    "page_number_font": "Font",
+    "page_number_font_size": "Font Size",
+    "page_number_color": "Text Color",
+    "skip_cover_page": "Skip Cover Page",
+    "theme": "Theme",
+    "optimize_file_size": "Optimize File Size",
+    "confirm_reset": "Confirm Before Reset",
+}
+
+
+def compute_settings_diff(
+    old_values: dict[str, Any], new_values: dict[str, Any]
+) -> list[str]:
+    """Return human-readable descriptions of changed setting keys."""
+    changes: list[str] = []
+    for key, new_val in new_values.items():
+        old_val = old_values.get(key)
+        if old_val != new_val:
+            label = SETTING_LABELS.get(key, key.replace("_", " ").title())
+            changes.append(f"{label}: {old_val} → {new_val}")
+    return changes

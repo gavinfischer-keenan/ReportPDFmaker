@@ -1,10 +1,11 @@
-import { escapeHtml } from './html-utils.js';
 /**
  * Main Application Controller for ReportPDFmaker Web
  * 100% Client-Side SPA
  */
 
-import { state, getPageDimensions } from './state.js';
+import { escapeHtml } from './html-utils.js';
+import { state } from './state.js';
+import { formatFileSize } from './math-utils.js';
 import {
   convertImageFile,
   convertPdfFile,
@@ -13,23 +14,32 @@ import {
 } from './converters.js';
 import { CanvasPreview } from './canvas-preview.js';
 import { buildPdfDocument, downloadPdf } from './pdf-builder.js';
-import { compressPdf, formatFileSize } from './pdf-compressor.js';
+import { compressPdf } from './pdf-compressor.js';
 import { ThreeViewerModal } from './three-viewer.js';
+import { CommandPalette } from './command-palette.js';
+import { ShortcutManager, renderShortcutsModalContent } from './shortcuts.js';
+import { SettingsUI } from './settings-ui.js';
+import { createSampleReportPages, createSamplePdfFile } from './sample-generator.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Initialize Preview Canvas
-  const preview = new CanvasPreview('canvas-container');
+  // Core DOM Elements
+  const workspaceEl = document.querySelector('.app-workspace');
+  const mobileTabBtns = document.querySelectorAll('.mobile-tab-btn');
+  const mobileTabCount = document.getElementById('mobile-tab-count');
 
-  // Initialize 3D Viewer Modal
-  const threeModal = new ThreeViewerModal('modal-3d', 'three-container');
-
-  // Elements
   const fileInput = document.getElementById('file-input');
   const btnAddFiles = document.getElementById('btn-add-files');
   const btnClearAll = document.getElementById('btn-clear-all');
   const pagesListEl = document.getElementById('pages-list');
   const pageCountBadge = document.getElementById('page-count-badge');
   const dropZone = document.getElementById('drop-zone');
+
+  // Empty State CTA buttons
+  const previewEmptyState = document.getElementById('preview-empty-state');
+  const btnEmptyAddFiles = document.getElementById('btn-empty-add-files');
+  const btnEmptyLoadSample = document.getElementById('btn-empty-load-sample');
+  const btnEditorAddFiles = document.getElementById('btn-editor-add-files');
+  const btnEditorLoadSample = document.getElementById('btn-editor-load-sample');
 
   // Navigation & Zoom
   const btnPrevPage = document.getElementById('btn-prev-page');
@@ -43,10 +53,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Page Editor Sidebar
   const emptyEditorMessage = document.getElementById('empty-editor-message');
   const pageEditorControls = document.getElementById('page-editor-controls');
+  const btnRotate0 = document.getElementById('btn-rotate-0');
   const btnRotate90 = document.getElementById('btn-rotate-90');
   const btnRotate180 = document.getElementById('btn-rotate-180');
   const btnRotate270 = document.getElementById('btn-rotate-270');
-  const btnRotate0 = document.getElementById('btn-rotate-0');
+  const rotButtons = [btnRotate0, btnRotate90, btnRotate180, btnRotate270];
   const radioPortrait = document.getElementById('orient-portrait');
   const radioLandscape = document.getElementById('orient-landscape');
   const btnFitScale = document.getElementById('btn-fit-scale');
@@ -56,27 +67,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnMoveDown = document.getElementById('btn-move-down');
   const btnDeletePage = document.getElementById('btn-delete-page');
 
-  // Page Numbering Controls
-  const chkPageNumbers = document.getElementById('chk-page-numbers');
-  const pageNumbersConfig = document.getElementById('page-numbers-config');
-  const selectNumberPos = document.getElementById('num-position');
-  const selectNumberAlign = document.getElementById('num-alignment');
-  const selectNumberStyle = document.getElementById('num-style');
-  const selectNumberFont = document.getElementById('num-font');
-  const inputNumberSize = document.getElementById('num-size');
-  const inputNumberColor = document.getElementById('num-color');
-  const chkSkipCover = document.getElementById('chk-skip-cover');
-
-  // Document Settings & Export
-  const selectPageSize = document.getElementById('doc-page-size');
-  const inputFilename = document.getElementById('doc-filename');
+  // Header Controls & Export
+  const btnCommandPalette = document.getElementById('btn-command-palette');
+  const btnShortcuts = document.getElementById('btn-shortcuts');
   const btnExportPdf = document.getElementById('btn-export-pdf');
   const themeToggle = document.getElementById('theme-toggle');
 
-  // Progress Bar & Modals
+  // Progress Banner
   const progressBarContainer = document.getElementById('import-progress-container');
   const progressBarFill = document.getElementById('import-progress-fill');
   const progressBarText = document.getElementById('import-progress-text');
+
+  // Shortcuts Modal
+  const shortcutsModal = document.getElementById('modal-shortcuts');
+  const shortcutsModalBody = document.getElementById('shortcuts-modal-body');
+  const btnCloseShortcuts = document.getElementById('btn-close-shortcuts');
+  const btnDoneShortcuts = document.getElementById('btn-done-shortcuts');
 
   // Shrink PDF Modal
   const btnShrinkPdf = document.getElementById('btn-shrink-pdf');
@@ -84,6 +90,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnCloseShrink = document.getElementById('btn-close-shrink');
   const shrinkFileInput = document.getElementById('shrink-file-input');
   const shrinkDropZone = document.getElementById('shrink-drop-zone');
+  const shrinkEmptyHelper = document.getElementById('shrink-empty-helper');
+  const btnShrinkBrowse = document.getElementById('btn-shrink-browse');
+  const btnShrinkSample = document.getElementById('btn-shrink-sample');
   const shrinkFileDetails = document.getElementById('shrink-file-details');
   const shrinkFileName = document.getElementById('shrink-file-name');
   const shrinkFileSize = document.getElementById('shrink-file-size');
@@ -98,25 +107,109 @@ document.addEventListener('DOMContentLoaded', () => {
   let shrinkSelectedFile = null;
   let compressedPdfResult = null;
 
+  // Initialize Preview Canvas & 3D Viewer
+  const preview = new CanvasPreview('canvas-container', (zoom) => {
+    zoomLevelLabel.textContent = `${Math.round(zoom * 100)}%`;
+  });
+  const threeModal = new ThreeViewerModal('modal-3d', 'three-container');
+
+  // --------------------------------------------------------------------------
+  // Mobile / Tablet Pane Switching
+  // --------------------------------------------------------------------------
+  function setActivePane(pane) {
+    if (!workspaceEl) return;
+    workspaceEl.dataset.activePane = pane;
+    mobileTabBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.pane === pane);
+    });
+    if (pane === 'preview') {
+      requestAnimationFrame(() => {
+        if (preview.autoFit) preview.fitToContainer();
+        preview.render();
+      });
+    }
+  }
+
+  mobileTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => setActivePane(btn.dataset.pane));
+  });
+
   // --------------------------------------------------------------------------
   // Theme Management
   // --------------------------------------------------------------------------
   function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    state.updateSettings({ theme });
-    themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+    const resolved = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', resolved);
+    if (state.settings.theme !== resolved) {
+      state.updateSettings({ theme: resolved });
+    }
+    themeToggle.textContent = resolved === 'dark' ? '☀️' : '🌙';
   }
   applyTheme(state.settings.theme || 'dark');
 
   themeToggle.addEventListener('click', () => {
-    const newTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-    applyTheme(newTheme);
+    const cur = document.documentElement.getAttribute('data-theme');
+    applyTheme(cur === 'dark' ? 'light' : 'dark');
   });
 
   // --------------------------------------------------------------------------
-  // File Import Handling
+  // Settings UI (Grouped, Described, Diff Confirmation)
   // --------------------------------------------------------------------------
-  btnAddFiles.addEventListener('click', () => fileInput.click());
+  const settingsUI = new SettingsUI({
+    state,
+    onApplyTheme: applyTheme,
+    onLayoutChanged: () => {
+      if (preview.autoFit) preview.fitToContainer();
+      preview.render();
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Sample Report Loading
+  // --------------------------------------------------------------------------
+  async function loadSampleReport() {
+    try {
+      progressBarContainer.classList.remove('hidden');
+      progressBarFill.style.width = '40%';
+      progressBarText.textContent = 'Generating 3-page sample report…';
+
+      const samplePages = await createSampleReportPages();
+      progressBarFill.style.width = '100%';
+      progressBarText.textContent = 'Sample report ready!';
+
+      state.addPages(samplePages);
+      state.recordRecent({
+        id: 'action:load-sample',
+        type: 'action',
+        label: 'Load 3-Page Sample Report',
+        subtitle: 'Template with cover, landscape chart & appendix',
+        actionId: 'load-sample'
+      });
+
+      if (window.innerWidth <= 960) {
+        setActivePane('preview');
+      }
+    } catch (err) {
+      console.error('Failed to load sample report:', err);
+      alert('Could not generate sample report: ' + err.message);
+    } finally {
+      setTimeout(() => progressBarContainer.classList.add('hidden'), 600);
+    }
+  }
+
+  btnEmptyAddFiles?.addEventListener('click', () => fileInput.click());
+  btnEditorAddFiles?.addEventListener('click', () => fileInput.click());
+  btnEmptyLoadSample?.addEventListener('click', loadSampleReport);
+  btnEditorLoadSample?.addEventListener('click', loadSampleReport);
+
+  // --------------------------------------------------------------------------
+  // File Import & Drag/Drop
+  // --------------------------------------------------------------------------
+  function triggerAddFiles() {
+    fileInput.click();
+  }
+
+  btnAddFiles.addEventListener('click', triggerAddFiles);
   fileInput.addEventListener('change', (e) => {
     if (e.target.files && e.target.files.length > 0) {
       handleFiles(Array.from(e.target.files));
@@ -124,7 +217,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Drag & Drop
+  dropZone.addEventListener('click', triggerAddFiles);
+  dropZone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      triggerAddFiles();
+    }
+  });
+
   ['dragenter', 'dragover'].forEach(eventName => {
     dropZone.addEventListener(eventName, (e) => {
       e.preventDefault();
@@ -142,7 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   dropZone.addEventListener('drop', (e) => {
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
       handleFiles(Array.from(e.dataTransfer.files));
     }
   });
@@ -150,79 +250,123 @@ document.addEventListener('DOMContentLoaded', () => {
   async function handleFiles(files) {
     progressBarContainer.classList.remove('hidden');
     const total = files.length;
-    let completed = 0;
     const addedPages = [];
+    const orientPref = state.settings.defaultOrientation || 'auto';
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const ext = file.name.split('.').pop().toLowerCase();
 
-      progressBarFill.style.width = `${Math.round(((i) / total) * 100)}%`;
+      progressBarFill.style.width = `${Math.round((i / total) * 100)}%`;
       progressBarText.textContent = `Importing ${file.name} (${i + 1}/${total})…`;
 
       try {
+        let converted = [];
         if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) {
-          const page = await convertImageFile(file);
-          addedPages.push(page);
+          converted = [await convertImageFile(file)];
         } else if (ext === 'pdf') {
-          const pdfPages = await convertPdfFile(file);
-          addedPages.push(...pdfPages);
+          converted = await convertPdfFile(file);
         } else if (ext === 'docx') {
-          const docPages = await convertDocxFile(file);
-          addedPages.push(...docPages);
+          converted = await convertDocxFile(file);
         } else if (['txt', 'md', 'csv', 'log', 'json'].includes(ext)) {
-          const textPages = await convertTextFile(file);
-          addedPages.push(...textPages);
+          converted = await convertTextFile(file);
         } else if (['gltf', 'glb'].includes(ext)) {
-          // Open 3D viewer modal for interactive camera snapshot
           await threeModal.loadModel(file, (capturedPage) => {
+            if (orientPref === 'portrait') capturedPage.pageLandscape = false;
+            else if (orientPref === 'landscape') capturedPage.pageLandscape = true;
             state.addPages([capturedPage]);
           });
         } else {
           console.warn(`Unsupported file format: ${file.name}`);
         }
+
+        if (converted.length > 0) {
+          for (const p of converted) {
+            if (orientPref === 'portrait') p.pageLandscape = false;
+            else if (orientPref === 'landscape') p.pageLandscape = true;
+          }
+          addedPages.push(...converted);
+          state.recordRecent({
+            id: `file:${file.name}`,
+            type: 'file',
+            label: `Imported ${file.name}`,
+            subtitle: `${converted.length} page${converted.length === 1 ? '' : 's'}`,
+            pageId: converted[0].id
+          });
+        }
       } catch (err) {
         console.error(`Error processing ${file.name}:`, err);
         alert(`Failed to import "${file.name}":\n${err.message}`);
       }
-      completed++;
     }
 
     progressBarFill.style.width = '100%';
     progressBarText.textContent = 'Import complete!';
-    setTimeout(() => {
-      progressBarContainer.classList.add('hidden');
-    }, 600);
+    setTimeout(() => progressBarContainer.classList.add('hidden'), 600);
 
     if (addedPages.length > 0) {
       state.addPages(addedPages);
+      if (window.innerWidth <= 960) {
+        setActivePane('preview');
+      }
     }
   }
 
   // --------------------------------------------------------------------------
-  // Document Pages UI Rendering & Reordering
+  // Document Pages UI & Empty States
   // --------------------------------------------------------------------------
   state.on('pages_changed', renderPagesList);
   state.on('page_selected', updateSelectedPageUI);
+  state.on('page_updated', updateSelectedPageUI);
 
   function renderPagesList(pages) {
     pagesListEl.innerHTML = '';
     pageCountBadge.textContent = `${pages.length} page${pages.length === 1 ? '' : 's'}`;
+    if (mobileTabCount) mobileTabCount.textContent = String(pages.length);
 
-    if (pages.length === 0) {
+    const hasPages = pages.length > 0;
+    btnClearAll.disabled = !hasPages;
+    previewEmptyState?.classList.toggle('hidden', hasPages && Boolean(state.getCurrentPage()));
+
+    if (!hasPages) {
       emptyEditorMessage.classList.remove('hidden');
       pageEditorControls.classList.add('hidden');
       pageIndicator.textContent = '0 / 0';
+      btnPrevPage.disabled = true;
+      btnNextPage.disabled = true;
+      btnZoomIn.disabled = true;
+      btnZoomOut.disabled = true;
+      btnZoomFit.disabled = true;
+
+      pagesListEl.innerHTML = `
+        <div class="empty-state-card">
+          <div class="empty-state-icon">📑</div>
+          <div class="empty-state-title">Document Queue is Empty</div>
+          <p class="empty-state-desc">
+            Add images, PDFs, Word docs, or text files to build your document, then drag cards to reorder pages.
+          </p>
+          <div class="empty-state-actions">
+            <button type="button" id="btn-list-add-files" class="btn btn-primary btn-sm">➕ Add Files</button>
+            <button type="button" id="btn-list-load-sample" class="btn btn-secondary btn-sm">✨ Load Sample</button>
+          </div>
+        </div>
+      `;
+      document.getElementById('btn-list-add-files')?.addEventListener('click', triggerAddFiles);
+      document.getElementById('btn-list-load-sample')?.addEventListener('click', loadSampleReport);
       return;
     }
+
+    btnZoomIn.disabled = false;
+    btnZoomOut.disabled = false;
+    btnZoomFit.disabled = false;
 
     pages.forEach((page, idx) => {
       const card = document.createElement('div');
       card.className = `page-card ${idx === state.currentIndex ? 'selected' : ''}`;
       card.draggable = true;
+      card.tabIndex = 0;
       card.dataset.index = idx;
 
-      // Type Badge
       const typeBadge = page.sourceType.toUpperCase();
 
       card.innerHTML = `
@@ -238,20 +382,28 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
         <div class="page-card-actions">
-          <button class="btn-card-action" data-action="up" title="Move Up" ${idx === 0 ? 'disabled' : ''}>▲</button>
-          <button class="btn-card-action" data-action="down" title="Move Down" ${idx === pages.length - 1 ? 'disabled' : ''}>▼</button>
-          <button class="btn-card-action btn-card-del" data-action="del" title="Delete Page">✕</button>
+          <button type="button" class="btn-card-action" data-action="up" title="Move Up" ${idx === 0 ? 'disabled' : ''}>▲</button>
+          <button type="button" class="btn-card-action" data-action="down" title="Move Down" ${idx === pages.length - 1 ? 'disabled' : ''}>▼</button>
+          <button type="button" class="btn-card-action btn-card-del" data-action="del" title="Delete Page">✕</button>
         </div>
       `;
 
-      // Select page on click
       card.addEventListener('click', (e) => {
         if (!e.target.closest('.btn-card-action')) {
+          state.selectPage(idx);
+          if (window.innerWidth <= 960) {
+            setActivePane('preview');
+          }
+        }
+      });
+
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
           state.selectPage(idx);
         }
       });
 
-      // Actions within card
       card.querySelectorAll('.btn-card-action').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -262,30 +414,21 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       });
 
-      // Drag and Drop reordering
       card.addEventListener('dragstart', (e) => {
-        e.dataTransfer.setData('text/plain', idx);
+        e.dataTransfer.setData('text/plain', String(idx));
         card.classList.add('dragging');
       });
-
-      card.addEventListener('dragend', () => {
-        card.classList.remove('dragging');
-      });
-
+      card.addEventListener('dragend', () => card.classList.remove('dragging'));
       card.addEventListener('dragover', (e) => {
         e.preventDefault();
         card.classList.add('drag-over');
       });
-
-      card.addEventListener('dragleave', () => {
-        card.classList.remove('drag-over');
-      });
-
+      card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
       card.addEventListener('drop', (e) => {
         e.preventDefault();
         card.classList.remove('drag-over');
         const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        if (!isNaN(fromIdx) && fromIdx !== idx) {
+        if (!Number.isNaN(fromIdx) && fromIdx !== idx) {
           state.movePage(fromIdx, idx);
         }
       });
@@ -295,15 +438,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateSelectedPageUI(page) {
-    // Update card selection styling
     document.querySelectorAll('.page-card').forEach((card, idx) => {
       card.classList.toggle('selected', idx === state.currentIndex);
     });
+
+    previewEmptyState?.classList.toggle('hidden', Boolean(page));
 
     if (!page) {
       emptyEditorMessage.classList.remove('hidden');
       pageEditorControls.classList.add('hidden');
       pageIndicator.textContent = '0 / 0';
+      btnPrevPage.disabled = true;
+      btnNextPage.disabled = true;
       return;
     }
 
@@ -314,22 +460,29 @@ document.addEventListener('DOMContentLoaded', () => {
     btnPrevPage.disabled = state.currentIndex <= 0;
     btnNextPage.disabled = state.currentIndex >= state.pages.length - 1;
 
-    // Orientation
     if (page.pageLandscape) {
       radioLandscape.checked = true;
     } else {
       radioPortrait.checked = true;
     }
 
-    // Scale
+    const activeRot = ((page.imageRotation || 0) % 360 + 360) % 360;
+    rotButtons.forEach(btn => {
+      const btnRot = parseInt(btn?.dataset.rot || '-1', 10);
+      btn?.classList.toggle('active', btnRot === activeRot);
+    });
+
     const scalePercent = Math.round((page.imageScale || 1.0) * 100);
     scaleSlider.value = scalePercent;
     scaleValueLabel.textContent = `${scalePercent}%`;
 
-    // Move buttons in editor
     btnMoveUp.disabled = state.currentIndex <= 0;
     btnMoveDown.disabled = state.currentIndex >= state.pages.length - 1;
   }
+
+  // Initial empty state render
+  renderPagesList(state.pages);
+  updateSelectedPageUI(state.getCurrentPage());
 
   // --------------------------------------------------------------------------
   // Navigation & Zoom Listeners
@@ -344,18 +497,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnZoomIn.addEventListener('click', () => {
     preview.setZoom(Math.min(3.0, preview.zoom + 0.15));
-    zoomLevelLabel.textContent = `${Math.round(preview.zoom * 100)}%`;
   });
 
   btnZoomOut.addEventListener('click', () => {
     preview.setZoom(Math.max(0.2, preview.zoom - 0.15));
-    zoomLevelLabel.textContent = `${Math.round(preview.zoom * 100)}%`;
   });
 
   btnZoomFit.addEventListener('click', () => {
     preview.fitToContainer();
     preview.render();
-    zoomLevelLabel.textContent = `${Math.round(preview.zoom * 100)}%`;
   });
 
   btnClearAll.addEventListener('click', () => {
@@ -368,39 +518,32 @@ document.addEventListener('DOMContentLoaded', () => {
   // --------------------------------------------------------------------------
   // Page Editor Controls
   // --------------------------------------------------------------------------
-  btnRotate90.addEventListener('click', () => {
+  function rotateCurrentPage(delta) {
     const page = state.getCurrentPage();
     if (!page) return;
-    const nextRot = ((page.imageRotation || 0) + 90) % 360;
+    const nextRot = ((page.imageRotation || 0) + delta) % 360;
     state.updateCurrentPage({ imageRotation: nextRot });
-  });
-
-  btnRotate180.addEventListener('click', () => {
-    const page = state.getCurrentPage();
-    if (!page) return;
-    const nextRot = ((page.imageRotation || 0) + 180) % 360;
-    state.updateCurrentPage({ imageRotation: nextRot });
-  });
-
-  btnRotate270.addEventListener('click', () => {
-    const page = state.getCurrentPage();
-    if (!page) return;
-    const nextRot = ((page.imageRotation || 0) + 270) % 360;
-    state.updateCurrentPage({ imageRotation: nextRot });
-  });
+    renderPagesList(state.pages);
+  }
 
   btnRotate0.addEventListener('click', () => {
+    if (!state.getCurrentPage()) return;
     state.updateCurrentPage({ imageRotation: 0 });
   });
+  btnRotate90.addEventListener('click', () => rotateCurrentPage(90));
+  btnRotate180.addEventListener('click', () => rotateCurrentPage(180));
+  btnRotate270.addEventListener('click', () => rotateCurrentPage(270));
 
   radioPortrait.addEventListener('change', () => {
     state.updateCurrentPage({ pageLandscape: false });
     if (preview.autoFit) preview.fitToContainer();
+    renderPagesList(state.pages);
   });
 
   radioLandscape.addEventListener('change', () => {
     state.updateCurrentPage({ pageLandscape: true });
     if (preview.autoFit) preview.fitToContainer();
+    renderPagesList(state.pages);
   });
 
   btnFitScale.addEventListener('click', () => {
@@ -410,8 +553,6 @@ document.addEventListener('DOMContentLoaded', () => {
       imageOffsetY: 0,
       imageCrop: null
     });
-    scaleSlider.value = 100;
-    scaleValueLabel.textContent = '100%';
   });
 
   scaleSlider.addEventListener('input', (e) => {
@@ -429,58 +570,20 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   btnDeletePage.addEventListener('click', () => {
-    state.removePage(state.currentIndex);
+    if (state.currentIndex >= 0) state.removePage(state.currentIndex);
   });
 
   // --------------------------------------------------------------------------
-  // Page Numbering Controls
+  // PDF Export (100% Client-Side)
   // --------------------------------------------------------------------------
-  chkPageNumbers.checked = state.settings.pageNumbers;
-  pageNumbersConfig.classList.toggle('hidden', !state.settings.pageNumbers);
-
-  chkPageNumbers.addEventListener('change', (e) => {
-    const enabled = e.target.checked;
-    pageNumbersConfig.classList.toggle('hidden', !enabled);
-    state.updateSettings({ pageNumbers: enabled });
-  });
-
-  selectNumberPos.value = state.settings.pageNumberPosition;
-  selectNumberAlign.value = state.settings.pageNumberAlignment;
-  selectNumberStyle.value = state.settings.pageNumberStyle;
-  selectNumberFont.value = state.settings.pageNumberFont;
-  inputNumberSize.value = state.settings.pageNumberFontSize;
-  inputNumberColor.value = state.settings.pageNumberColor;
-  chkSkipCover.checked = state.settings.skipCoverPage;
-
-  selectNumberPos.addEventListener('change', (e) => state.updateSettings({ pageNumberPosition: e.target.value }));
-  selectNumberAlign.addEventListener('change', (e) => state.updateSettings({ pageNumberAlignment: e.target.value }));
-  selectNumberStyle.addEventListener('change', (e) => state.updateSettings({ pageNumberStyle: e.target.value }));
-  selectNumberFont.addEventListener('change', (e) => state.updateSettings({ pageNumberFont: e.target.value }));
-  inputNumberSize.addEventListener('input', (e) => state.updateSettings({ pageNumberFontSize: parseInt(e.target.value, 10) }));
-  inputNumberColor.addEventListener('input', (e) => state.updateSettings({ pageNumberColor: e.target.value }));
-  chkSkipCover.addEventListener('change', (e) => state.updateSettings({ skipCoverPage: e.target.checked }));
-
-  // Page Size & Filename
-  selectPageSize.value = state.settings.pageSize;
-  selectPageSize.addEventListener('change', (e) => {
-    state.updateSettings({ pageSize: e.target.value });
-    if (preview.autoFit) preview.fitToContainer();
-  });
-
-  inputFilename.value = state.settings.outputFilename;
-  inputFilename.addEventListener('input', (e) => state.updateSettings({ outputFilename: e.target.value }));
-
-  // --------------------------------------------------------------------------
-  // 💾 PDF Export (100% Client-Side)
-  // --------------------------------------------------------------------------
-  btnExportPdf.addEventListener('click', async () => {
+  async function exportDocumentPdf() {
     if (state.pages.length === 0) {
-      alert('Please add at least one page before exporting.');
+      alert('Please add at least one page (or load the Sample Report) before downloading.');
       return;
     }
 
     btnExportPdf.disabled = true;
-    btnExportPdf.textContent = 'Generating PDF…';
+    btnExportPdf.innerHTML = '<span class="btn-emoji">⏳</span><span class="btn-label">Generating…</span>';
 
     try {
       progressBarContainer.classList.remove('hidden');
@@ -492,43 +595,96 @@ document.addEventListener('DOMContentLoaded', () => {
       progressBarFill.style.width = '100%';
       progressBarText.textContent = 'Download starting…';
 
-      const filename = inputFilename.value.trim() || 'Report.pdf';
+      const filename = (state.settings.outputFilename || 'Report.pdf').trim() || 'Report.pdf';
       downloadPdf(pdfBytes, filename);
+      state.recordRecent({
+        id: 'action:export-pdf',
+        type: 'action',
+        label: `Exported ${filename}`,
+        subtitle: `${state.pages.length} page${state.pages.length === 1 ? '' : 's'}`,
+        actionId: 'export-pdf'
+      });
     } catch (err) {
       console.error('PDF export failed:', err);
       alert('Error generating PDF:\n' + err.message);
     } finally {
       btnExportPdf.disabled = false;
-      btnExportPdf.textContent = '💾 Download PDF';
+      btnExportPdf.innerHTML = '<span class="btn-emoji">💾</span><span class="btn-label">Download PDF</span>';
       setTimeout(() => progressBarContainer.classList.add('hidden'), 1200);
     }
-  });
+  }
+
+  btnExportPdf.addEventListener('click', exportDocumentPdf);
 
   // --------------------------------------------------------------------------
-  // 🗜️ Shrink / Compress PDF Modal
+  // Shrink / Compress PDF Modal
   // --------------------------------------------------------------------------
-  btnShrinkPdf.addEventListener('click', () => {
+  function openShrinkModal() {
     shrinkModal.classList.remove('hidden');
     resetShrinkDialog();
-  });
+  }
 
-  btnCloseShrink.addEventListener('click', () => {
+  function closeShrinkModal() {
     shrinkModal.classList.add('hidden');
+  }
+
+  btnShrinkPdf.addEventListener('click', openShrinkModal);
+  btnCloseShrink.addEventListener('click', closeShrinkModal);
+  shrinkModal.addEventListener('click', (e) => {
+    if (e.target === shrinkModal) closeShrinkModal();
   });
 
   function resetShrinkDialog() {
     shrinkSelectedFile = null;
     compressedPdfResult = null;
     shrinkFileDetails.classList.add('hidden');
+    shrinkEmptyHelper?.classList.remove('hidden');
     shrinkProgress.classList.add('hidden');
     shrinkResult.classList.add('hidden');
     btnStartCompress.disabled = true;
   }
 
   shrinkDropZone.addEventListener('click', () => shrinkFileInput.click());
+  btnShrinkBrowse?.addEventListener('click', () => shrinkFileInput.click());
+  shrinkDropZone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      shrinkFileInput.click();
+    }
+  });
+
+  ['dragenter', 'dragover'].forEach(ev => {
+    shrinkDropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      shrinkDropZone.classList.add('drag-active');
+    });
+  });
+  ['dragleave', 'drop'].forEach(ev => {
+    shrinkDropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      shrinkDropZone.classList.remove('drag-active');
+    });
+  });
+  shrinkDropZone.addEventListener('drop', (e) => {
+    if (e.dataTransfer?.files?.[0]) {
+      handleShrinkFile(e.dataTransfer.files[0]);
+    }
+  });
+
   shrinkFileInput.addEventListener('change', (e) => {
-    if (e.target.files && e.target.files[0]) {
+    if (e.target.files?.[0]) {
       handleShrinkFile(e.target.files[0]);
+    }
+  });
+
+  btnShrinkSample?.addEventListener('click', async () => {
+    try {
+      const sampleFile = await createSamplePdfFile();
+      handleShrinkFile(sampleFile);
+    } catch (err) {
+      alert('Could not create sample PDF: ' + err.message);
     }
   });
 
@@ -541,6 +697,7 @@ document.addEventListener('DOMContentLoaded', () => {
     shrinkFileName.textContent = file.name;
     shrinkFileSize.textContent = formatFileSize(file.size);
     shrinkFileDetails.classList.remove('hidden');
+    shrinkEmptyHelper?.classList.add('hidden');
     shrinkResult.classList.add('hidden');
     btnStartCompress.disabled = false;
   }
@@ -552,7 +709,7 @@ document.addEventListener('DOMContentLoaded', () => {
     shrinkProgress.classList.remove('hidden');
     shrinkResult.classList.add('hidden');
 
-    const level = document.querySelector('input[name="shrink-level"]:checked').value;
+    const level = document.querySelector('input[name="shrink-level"]:checked')?.value || 'standard';
 
     try {
       const result = await compressPdf(shrinkSelectedFile, level, (cur, total, msg) => {
@@ -584,11 +741,201 @@ document.addEventListener('DOMContentLoaded', () => {
     downloadPdf(compressedPdfResult.bytes, `${baseName}_shrunk.pdf`);
   });
 
-  // 3D Capture button in 3D modal
-  document.getElementById('btn-capture-3d').addEventListener('click', () => {
-    threeModal.captureSnapshot();
+  // --------------------------------------------------------------------------
+  // 3D Capture Modal
+  // --------------------------------------------------------------------------
+  document.getElementById('btn-capture-3d').addEventListener('click', () => threeModal.captureSnapshot());
+  document.getElementById('btn-close-3d').addEventListener('click', () => threeModal.close());
+
+  // --------------------------------------------------------------------------
+  // Shortcuts Overlay ("?") & Command Palette (Cmd/Ctrl+K)
+  // --------------------------------------------------------------------------
+  renderShortcutsModalContent(shortcutsModalBody);
+
+  function openShortcutsModal() {
+    shortcutsModal.classList.remove('hidden');
+  }
+  function closeShortcutsModal() {
+    shortcutsModal.classList.add('hidden');
+  }
+  function toggleShortcutsModal() {
+    if (shortcutsModal.classList.contains('hidden')) openShortcutsModal();
+    else closeShortcutsModal();
+  }
+
+  btnShortcuts?.addEventListener('click', toggleShortcutsModal);
+  btnCloseShortcuts?.addEventListener('click', closeShortcutsModal);
+  btnDoneShortcuts?.addEventListener('click', closeShortcutsModal);
+  shortcutsModal?.addEventListener('click', (e) => {
+    if (e.target === shortcutsModal) closeShortcutsModal();
   });
-  document.getElementById('btn-close-3d').addEventListener('click', () => {
-    threeModal.close();
+
+  function getOpenModalId() {
+    const ids = ['modal-command-palette', 'modal-shortcuts', 'modal-settings', 'modal-shrink', 'modal-3d'];
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el && !el.classList.contains('hidden')) return id;
+    }
+    return null;
+  }
+
+  function closeTopModal() {
+    const openId = getOpenModalId();
+    if (openId === 'modal-command-palette') palette.close();
+    else if (openId === 'modal-shortcuts') closeShortcutsModal();
+    else if (openId === 'modal-settings') settingsUI.closeModal();
+    else if (openId === 'modal-shrink') closeShrinkModal();
+    else if (openId === 'modal-3d') threeModal.close();
+  }
+
+  function runAppAction(actionId) {
+    const page = state.getCurrentPage();
+    switch (actionId) {
+      case 'open-palette':
+        palette.toggle();
+        break;
+      case 'toggle-shortcuts':
+        toggleShortcutsModal();
+        break;
+      case 'add-files':
+        triggerAddFiles();
+        break;
+      case 'load-sample':
+        loadSampleReport();
+        break;
+      case 'export-pdf':
+        exportDocumentPdf();
+        break;
+      case 'open-shrink':
+        openShrinkModal();
+        break;
+      case 'open-settings':
+        settingsUI.openModal();
+        break;
+      case 'rotate-90':
+        if (page) rotateCurrentPage(90);
+        break;
+      case 'toggle-orientation':
+        if (page) {
+          state.updateCurrentPage({ pageLandscape: !page.pageLandscape });
+          if (preview.autoFit) preview.fitToContainer();
+          renderPagesList(state.pages);
+        }
+        break;
+      case 'fit-scale':
+        if (page) {
+          state.updateCurrentPage({ imageScale: 1.0, imageOffsetX: 0, imageOffsetY: 0, imageCrop: null });
+        }
+        break;
+      case 'toggle-page-numbers':
+        state.updateSettings({ pageNumbers: !state.settings.pageNumbers });
+        break;
+      case 'fit-view':
+        if (page) {
+          preview.fitToContainer();
+          preview.render();
+        }
+        break;
+      case 'zoom-in':
+        if (page) preview.setZoom(Math.min(3.0, preview.zoom + 0.15));
+        break;
+      case 'zoom-out':
+        if (page) preview.setZoom(Math.max(0.2, preview.zoom - 0.15));
+        break;
+      case 'prev-page':
+        if (state.currentIndex > 0) state.selectPage(state.currentIndex - 1);
+        break;
+      case 'next-page':
+        if (state.currentIndex < state.pages.length - 1) state.selectPage(state.currentIndex + 1);
+        break;
+      case 'move-up':
+        if (state.currentIndex > 0) state.movePage(state.currentIndex, state.currentIndex - 1);
+        break;
+      case 'move-down':
+        if (state.currentIndex >= 0 && state.currentIndex < state.pages.length - 1) {
+          state.movePage(state.currentIndex, state.currentIndex + 1);
+        }
+        break;
+      case 'delete-page':
+        if (state.currentIndex >= 0) state.removePage(state.currentIndex);
+        break;
+      case 'clear-all':
+        if (state.pages.length > 0 && confirm('Are you sure you want to clear all pages?')) {
+          state.clearAll();
+        }
+        break;
+      case 'toggle-theme': {
+        const cur = document.documentElement.getAttribute('data-theme');
+        applyTheme(cur === 'dark' ? 'light' : 'dark');
+        break;
+      }
+      default:
+        break;
+    }
+    if (!['open-palette', 'toggle-shortcuts', 'load-sample', 'export-pdf'].includes(actionId)) {
+      state.recordRecent({
+        id: `action:${actionId}`,
+        type: 'action',
+        label: actionId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        subtitle: 'Quick Action',
+        actionId
+      });
+    }
+  }
+
+  const palette = new CommandPalette({
+    state,
+    getActions: () => {
+      const hasPage = Boolean(state.getCurrentPage());
+      const hasMultiple = state.pages.length > 1;
+      return [
+        { id: 'add-files', icon: '➕', label: 'Add Files to Document', subtitle: 'Import Images, PDF, DOCX, Text, or 3D', shortcut: 'A', keywords: 'import upload open' },
+        { id: 'load-sample', icon: '✨', label: 'Load 3-Page Sample Report', subtitle: 'Populate workspace with sample pages', keywords: 'template demo sample' },
+        { id: 'export-pdf', icon: '💾', label: 'Download / Export PDF', subtitle: 'Assemble and download your document', shortcut: 'E', disabled: state.pages.length === 0, keywords: 'save build export' },
+        { id: 'open-shrink', icon: '🗜️', label: 'Shrink / Compress PDF', subtitle: 'Optimize an existing PDF locally', shortcut: 'S', keywords: 'compress optimize reduce' },
+        { id: 'open-settings', icon: '⚙️', label: 'Open Document & App Settings', subtitle: 'Page size, defaults, numbering, export quality', shortcut: 'G', keywords: 'settings config preferences' },
+        { id: 'rotate-90', icon: '🔄', label: 'Rotate Page Content +90°', subtitle: 'Rotate image on current page', shortcut: 'R', disabled: !hasPage, keywords: 'turn spin angle' },
+        { id: 'toggle-orientation', icon: '📐', label: 'Toggle Portrait / Landscape', subtitle: 'Switch orientation of selected page', shortcut: 'O', disabled: !hasPage, keywords: 'orientation portrait landscape' },
+        { id: 'fit-scale', icon: '⊡', label: 'Reset / Fit Image Scale', subtitle: 'Reset scale, offset, and crop', disabled: !hasPage, keywords: 'reset scale fit' },
+        { id: 'toggle-page-numbers', icon: '🔢', label: `${state.settings.pageNumbers ? 'Disable' : 'Enable'} Page Numbers`, subtitle: 'Toggle live header/footer page numbers', shortcut: 'N', keywords: 'numbering footer header' },
+        { id: 'fit-view', icon: '👁️', label: 'Fit Page to Preview Window', subtitle: 'Center and fit current page in canvas', shortcut: 'F', disabled: !hasPage, keywords: 'zoom fit preview' },
+        { id: 'zoom-in', icon: '🔍', label: 'Zoom In Preview', shortcut: '+', disabled: !hasPage, keywords: 'magnify larger' },
+        { id: 'zoom-out', icon: '🔎', label: 'Zoom Out Preview', shortcut: '−', disabled: !hasPage, keywords: 'smaller' },
+        { id: 'prev-page', icon: '◀', label: 'Previous Page', shortcut: '←', disabled: state.currentIndex <= 0, keywords: 'back prev' },
+        { id: 'next-page', icon: '▶', label: 'Next Page', shortcut: '→', disabled: state.currentIndex >= state.pages.length - 1, keywords: 'forward next' },
+        { id: 'move-up', icon: '▲', label: 'Move Selected Page Up', disabled: state.currentIndex <= 0, keywords: 'reorder earlier' },
+        { id: 'move-down', icon: '▼', label: 'Move Selected Page Down', disabled: !hasMultiple || state.currentIndex >= state.pages.length - 1, keywords: 'reorder later' },
+        { id: 'delete-page', icon: '🗑️', label: 'Delete Selected Page', shortcut: 'Del', disabled: !hasPage, keywords: 'remove delete' },
+        { id: 'clear-all', icon: '🧹', label: 'Clear All Pages', disabled: state.pages.length === 0, keywords: 'reset empty queue' },
+        { id: 'toggle-theme', icon: '🌗', label: 'Toggle Dark / Light Theme', shortcut: 'T', keywords: 'appearance dark light mode' },
+        { id: 'toggle-shortcuts', icon: '⌨️', label: 'Show Keyboard Shortcuts', shortcut: '?', keywords: 'help keys hotkeys' }
+      ];
+    },
+    onSelectPage: (idx) => {
+      state.selectPage(idx);
+      if (window.innerWidth <= 960) setActivePane('preview');
+    },
+    onNavigateView: (viewId) => {
+      if (viewId === 'pages' || viewId === 'preview' || viewId === 'editor') {
+        setActivePane(viewId);
+      } else if (viewId === 'settings') {
+        settingsUI.openModal();
+      } else if (viewId === 'shrink') {
+        openShrinkModal();
+      } else if (viewId === 'shortcuts') {
+        openShortcutsModal();
+      }
+    },
+    onRunAction: runAppAction
   });
+
+  btnCommandPalette?.addEventListener('click', () => palette.open());
+
+  const shortcutManager = new ShortcutManager({
+    runAction: runAppAction,
+    getOpenModalId,
+    closeTopModal,
+    onToggleShortcuts: toggleShortcutsModal
+  });
+  shortcutManager.attach();
 });

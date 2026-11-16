@@ -5,13 +5,29 @@ WCAG-compliant color contrast checking for accessible UI rendering.
 """
 
 
+# Precomputed sRGB linearization lookup table for 8-bit channels (0..255)
+_SRGB_LINEAR_LUT: tuple[float, ...] = tuple(
+    (c / 255.0) / 12.92
+    if (c / 255.0) <= 0.04045
+    else (((c / 255.0) + 0.055) / 1.055) ** 2.4
+    for c in range(256)
+)
+
+
+def _linearize_channel(c: float) -> float:
+    if isinstance(c, int) and 0 <= c <= 255:
+        return _SRGB_LINEAR_LUT[c]
+    norm = max(0.0, min(255.0, float(c))) / 255.0
+    return norm / 12.92 if norm <= 0.04045 else ((norm + 0.055) / 1.055) ** 2.4
+
+
 def get_relative_luminance(r: int, g: int, b: int) -> float:
     """Calculate relative luminance of an sRGB color (0-255 per channel)."""
-    def linearize(c: float) -> float:
-        c /= 255.0
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-
-    return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
+    return (
+        0.2126 * _linearize_channel(r)
+        + 0.7152 * _linearize_channel(g)
+        + 0.0722 * _linearize_channel(b)
+    )
 
 
 def get_contrast_ratio(rgb1: tuple[int, int, int], rgb2: tuple[int, int, int]) -> float:
@@ -47,8 +63,9 @@ def get_contrast_text_color(bg_hex: str) -> str:
     try:
         rgb = hex_to_rgb(bg_hex)
         luminance = get_relative_luminance(*rgb)
-        # Threshold ~0.179 is the midpoint for 4.5:1 contrast against both white and black
-        return "#ffffff" if luminance < 0.179 else "#000000"
+        # Exact WCAG midpoint where contrast against white (1.0) equals contrast against black (0.0):
+        # sqrt(1.05 * 0.05) - 0.05 ≈ 0.1791287847
+        return "#ffffff" if luminance < 0.1791287847 else "#000000"
     except Exception:
         return "#ffffff"
 

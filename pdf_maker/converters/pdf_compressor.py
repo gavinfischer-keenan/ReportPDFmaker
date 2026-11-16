@@ -155,14 +155,19 @@ class CompressionResult:
 
 def _get_image_dpi(img_dict: dict, page_width_pt: float, page_height_pt: float) -> float:
     """
-    Estimate the effective DPI of an image on a page.
+    Estimate the effective DPI of an image on a page across both axes.
     Falls back to 150 if dimensions are unavailable.
     """
     try:
         w_px = img_dict.get("width",  0)
         h_px = img_dict.get("height", 0)
+        dpi_candidates: list[float] = []
         if w_px > 0 and page_width_pt > 0:
-            return (w_px / page_width_pt) * 72.0   # 1 pt = 1/72 inch
+            dpi_candidates.append((w_px / page_width_pt) * 72.0)
+        if h_px > 0 and page_height_pt > 0:
+            dpi_candidates.append((h_px / page_height_pt) * 72.0)
+        if dpi_candidates:
+            return max(dpi_candidates)
     except Exception:
         pass
     return 150.0
@@ -376,8 +381,10 @@ def compress_pdf(
                     w_px  = img_info[2]
                     h_px  = img_info[3]
 
-                    # Estimate current DPI
-                    current_dpi = (w_px / pw_pt) * 72.0 if pw_pt > 0 else 150.0
+                    # Estimate current DPI across width and height
+                    current_dpi = _get_image_dpi(
+                        {"width": w_px, "height": h_px}, pw_pt, ph_pt
+                    )
 
                     # Skip if already within target DPI and not grayscale
                     if (not do_grayscale

@@ -70,6 +70,28 @@ def convert_pdf_to_pages(
     return temp_paths, warnings
 
 
+def split_pdf_to_pages(pdf_path: str, cleanup_source: bool = False) -> list[str]:
+    """Split a multi-page PDF into individual single-page temp PDFs."""
+    src = fitz.open(pdf_path)
+    temp_paths: list[str] = []
+    for i in range(len(src)):
+        new_doc = fitz.open()
+        new_doc.insert_pdf(src, from_page=i, to_page=i)
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        new_doc.save(tmp_path)
+        new_doc.close()
+        temp_paths.append(tmp_path)
+    src.close()
+    if cleanup_source:
+        try:
+            os.unlink(pdf_path)
+        except Exception:
+            pass
+    return temp_paths
+
+
 def _make_error_page(message: str, page_size: str = "A4") -> str:
     """Create a single-page error PDF and return its temp path."""
     dims = {"A4": (595.28, 841.89), "Letter": (612.0, 792.0)}

@@ -4,6 +4,10 @@
  * Supports Light, Standard, Aggressive, and Grayscale compression 100% in-browser!
  */
 
+import { dataUrlToUint8Array, formatFileSize } from './math-utils.js';
+
+export { formatFileSize };
+
 export async function compressPdf(fileOrBytes, level = 'standard', onProgress = null) {
   if (!window.pdfjsLib || !window.PDFLib) {
     throw new Error('PDF libraries are required for compression');
@@ -27,7 +31,13 @@ export async function compressPdf(fileOrBytes, level = 'standard', onProgress = 
   }[level] || { scale: 1.5, quality: 0.75, grayscale: false };
 
   // Load document with PDF.js
-  const loadingTask = window.pdfjsLib.getDocument({ data: pdfBytes.slice(), isEvalSupported: false, cMapUrl: new URL('../vendor/cmaps/', import.meta.url).href, cMapPacked: true, standardFontDataUrl: new URL('../vendor/standard_fonts/', import.meta.url).href });
+  const loadingTask = window.pdfjsLib.getDocument({
+    data: pdfBytes.slice(),
+    isEvalSupported: false,
+    cMapUrl: new URL('../vendor/cmaps/', import.meta.url).href,
+    cMapPacked: true,
+    standardFontDataUrl: new URL('../vendor/standard_fonts/', import.meta.url).href
+  });
   const srcDoc = await loadingTask.promise;
   const numPages = srcDoc.numPages;
 
@@ -58,9 +68,9 @@ export async function compressPdf(fileOrBytes, level = 'standard', onProgress = 
       viewport: viewport
     }).promise;
 
-    // Convert to compressed JPEG data
+    // Convert to compressed JPEG data without fetch() overhead
     const jpegDataUrl = canvas.toDataURL('image/jpeg', config.quality);
-    const imgBytes = await fetch(jpegDataUrl).then(r => r.arrayBuffer());
+    const imgBytes = dataUrlToUint8Array(jpegDataUrl);
     const embeddedImg = await outDoc.embedJpg(imgBytes);
 
     const newPage = outDoc.addPage([originalViewport.width, originalViewport.height]);
@@ -75,7 +85,13 @@ export async function compressPdf(fileOrBytes, level = 'standard', onProgress = 
   const compressedBytes = await outDoc.save();
   const compressedSize = compressedBytes.byteLength;
   if (compressedSize >= originalSize) {
-    return {bytes: pdfBytes, originalSize, compressedSize: originalSize, savedPercent: 0, keptOriginal: true};
+    return {
+      bytes: pdfBytes,
+      originalSize,
+      compressedSize: originalSize,
+      savedPercent: 0,
+      keptOriginal: true
+    };
   }
   const savedPercent = Math.max(0, Math.round(((originalSize - compressedSize) / originalSize) * 100));
 
@@ -85,10 +101,4 @@ export async function compressPdf(fileOrBytes, level = 'standard', onProgress = 
     compressedSize,
     savedPercent
   };
-}
-
-export function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 }

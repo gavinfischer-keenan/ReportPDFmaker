@@ -19,6 +19,7 @@ Layout:
 
 import os
 import threading
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
 from typing import TYPE_CHECKING
@@ -37,6 +38,8 @@ from .dialogs import (
     ResetConfirmDialog,
     AboutDialog,
     ProgressDialog,
+    ShortcutsDialog,
+    CommandPaletteDialog,
 )
 from .shrink_dialog import ShrinkPDFDialog
 
@@ -55,6 +58,7 @@ class MainWindow(ctk.CTk):
         self._setup_window()
         self._build_ui()
         self._register_events()
+        self._bind_shortcuts()
         self._restore_window_state()
 
     # ------------------------------------------------------------------ #
@@ -130,7 +134,7 @@ class MainWindow(ctk.CTk):
         main_area.grid_rowconfigure(0, weight=1)
         main_area.grid_columnconfigure(1, weight=1)
 
-        self._file_panel    = FileListPanel(main_area, self.controller)
+        self._file_panel    = FileListPanel(main_area, self.controller, on_add_files=self._add_files)
         self._preview_panel = PreviewPanel(main_area, self.controller)
         self._editor_panel  = PageEditorPanel(main_area, self.controller)
 
@@ -212,10 +216,24 @@ class MainWindow(ctk.CTk):
                      fg_color=("gray70", "gray40")).pack(side="right", padx=4)
 
         ctk.CTkButton(
-            tb, text="ℹ  About", width=80, height=36,
+            tb, text="ℹ  About", width=76, height=36,
             font=ctk.CTkFont(size=11),
             fg_color="transparent", border_width=1,
             command=lambda: AboutDialog(self),
+        ).pack(side="right", padx=4)
+
+        ctk.CTkButton(
+            tb, text="?", width=34, height=36,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="transparent", border_width=1,
+            command=self._open_shortcuts,
+        ).pack(side="right", padx=4)
+
+        ctk.CTkButton(
+            tb, text="⌘K", width=44, height=36,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="transparent", border_width=1,
+            command=self._open_command_palette,
         ).pack(side="right", padx=4)
 
         # Theme toggle
@@ -468,11 +486,78 @@ class MainWindow(ctk.CTk):
 
 
     def _open_pn_settings(self) -> None:
-        def _on_apply():
+        def _on_apply(changes: list[str] | None = None):
             self._pn_var.set(self.settings.get("page_numbers"))
             # Re-render preview to reflect new settings
             self.after(0, self._preview_panel._schedule_render)
+            if changes:
+                self._set_status(f"✅ Saved {len(changes)} setting change(s): {', '.join(changes[:3])}")
+            else:
+                self._set_status("Settings saved (no changes).")
         PageNumberSettingsDialog(self, self.settings, on_apply=_on_apply)
+
+    def _is_typing_in_input(self) -> bool:
+        focused = self.focus_get()
+        return isinstance(focused, (tk.Entry, tk.Text, ctk.CTkEntry, ctk.CTkTextbox))
+
+    def _bind_shortcuts(self) -> None:
+        self.bind("<Control-k>", lambda _e: self._open_command_palette())
+        self.bind("<Control-K>", lambda _e: self._open_command_palette())
+        self.bind("<KeyPress>", self._on_key_press)
+
+    def _on_key_press(self, event) -> None:
+        if self._is_typing_in_input():
+            return
+        if event.state & 0x4:  # Ignore Ctrl combos handled elsewhere
+            return
+        ch = (event.char or "").lower()
+        sym = event.keysym
+        if event.char == "?":
+            self._open_shortcuts()
+        elif ch == "a":
+            self._add_files()
+        elif ch == "e":
+            self._save_pdf()
+        elif ch == "s":
+            self._open_shrink_dialog()
+        elif ch == "r" and self.controller.current_index >= 0:
+            page = self.controller.current_page
+            cur_rot = page.image_rotation if (page and page.is_image) else (page.rotation if page else 0)
+            self.controller.rotate_page(self.controller.current_index, (cur_rot + 90) % 360)
+        elif ch == "o" and self.controller.current_index >= 0:
+            self.controller.toggle_page_landscape(self.controller.current_index)
+        elif ch == "n":
+            self._pn_var.set(not self._pn_var.get())
+            self._on_page_numbers_toggle()
+        elif ch == "f":
+            self._preview_panel._zoom_fit()
+        elif ch == "t":
+            self._toggle_theme()
+        elif sym in ("Delete", "BackSpace") and self.controller.current_index >= 0:
+            self._remove_selected()
+        elif sym == "Left" and self.controller.current_index > 0:
+            self.controller.select_page(self.controller.current_index - 1)
+        elif sym == "Right" and self.controller.current_index < self.controller.page_count - 1:
+            self.controller.select_page(self.controller.current_index + 1)
+
+    def _open_shortcuts(self) -> None:
+        ShortcutsDialog(self)
+
+    def _open_command_palette(self) -> None:
+        items = [
+            ("Add Files… (A)", "Action", self._add_files),
+            ("Save / Export PDF (E)", "Action", self._save_pdf),
+            ("Shrink a PDF (S)", "Tool", self._open_shrink_dialog),
+            ("Document & Page Number Settings", "Settings", self._open_pn_settings),
+            ("Toggle Page Numbers (N)", "Settings", lambda: (self._pn_var.set(not self._pn_var.get()), self._on_page_numbers_toggle())),
+            ("Toggle Dark / Light Theme (T)", "View", self._toggle_theme),
+            ("Fit Preview Zoom (F)", "View", self._preview_panel._zoom_fit),
+            ("Keyboard Shortcuts (?)", "Help", self._open_shortcuts),
+            ("Reset All Pages & Settings", "Action", self._confirm_reset),
+        ]
+        for idx, p in enumerate(self.controller.pages):
+            items.append((f"Page {idx + 1}: {p.display_name}", "Page", lambda i=idx: self.controller.select_page(i)))
+        CommandPaletteDialog(self, items)
 
     def _browse_output_folder(self) -> None:
         folder = filedialog.askdirectory(

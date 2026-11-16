@@ -84,6 +84,9 @@ export class ThreeViewerModal {
     this.onCaptureCallback = onCapture;
     this.currentFileName = file.name;
     this.modal.classList.remove('hidden');
+    if (!this.animId && this.renderer) {
+      this.animate();
+    }
 
     // Resize renderer to container
     setTimeout(() => {
@@ -164,6 +167,10 @@ export class ThreeViewerModal {
 
   close() {
     this.modal.classList.add('hidden');
+    if (this.animId) {
+      cancelAnimationFrame(this.animId);
+      this.animId = null;
+    }
     if (this.currentModel) {
       this.scene.remove(this.currentModel);
       this.currentModel = null;

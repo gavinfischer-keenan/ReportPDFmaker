@@ -5,25 +5,42 @@
  */
 
 import { state, getPageDimensions } from './state.js';
+import {
+  computePageImageGeometry,
+  dataUrlToUint8Array,
+  parseHexColorRgb01,
+  formatPageNumberText
+} from './math-utils.js';
+
+const QUALITY_PRESETS = {
+  archival: { dpr: 2.0, jpegQuality: 0.92 },
+  balanced: { dpr: 1.5, jpegQuality: 0.80 },
+  compact: { dpr: 1.0, jpegQuality: 0.65 }
+};
 
 export async function buildPdfDocument(onProgress = null) {
   if (!window.PDFLib) {
     throw new Error('PDFLib library is not loaded');
   }
 
-  const { PDFDocument, rgb, degrees, StandardFonts } = window.PDFLib;
+  const { PDFDocument, degrees, StandardFonts } = window.PDFLib;
   const pdfDoc = await PDFDocument.create();
 
-  // Load standard fonts for page numbers
-  const fontMap = {
-    'Helvetica': await pdfDoc.embedFont(StandardFonts.Helvetica),
-    'Helvetica-Bold': await pdfDoc.embedFont(StandardFonts.HelveticaBold),
-    'Times-Roman': await pdfDoc.embedFont(StandardFonts.TimesRoman),
-    'Times-Bold': await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
-    'Courier': await pdfDoc.embedFont(StandardFonts.Courier),
-    'Courier-Bold': await pdfDoc.embedFont(StandardFonts.CourierBold),
-  };
+  // Load standard fonts only if page numbers are enabled
+  let fontMap = null;
+  if (state.settings.pageNumbers) {
+    fontMap = {
+      'Helvetica': await pdfDoc.embedFont(StandardFonts.Helvetica),
+      'Helvetica-Bold': await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+      'Times-Roman': await pdfDoc.embedFont(StandardFonts.TimesRoman),
+      'Times-Bold': await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
+      'Courier': await pdfDoc.embedFont(StandardFonts.Courier),
+      'Courier-Bold': await pdfDoc.embedFont(StandardFonts.CourierBold),
+    };
+  }
 
+  // Cache parsed source PDFs so multi-page imports parse once instead of N times
+  const srcPdfCache = new Map();
   const pages = state.pages;
   const total = pages.length;
 
@@ -35,13 +52,27 @@ export async function buildPdfDocument(onProgress = null) {
 
     const [ptW, ptH] = getPageDimensions(pageItem.pageLandscape, state.settings.pageSize);
 
-    // If it's a PDF page without custom image edits, we can copy the native vector page
-    if (pageItem.sourceType === 'pdf' && pageItem.pdfBytes && !pageItem.imageRotation && pageItem.pageLandscape === pageItem.sourceLandscape && !pageItem.imageCrop && pageItem.imageScale === 1.0 && pageItem.imageOffsetX === 0 && pageItem.imageOffsetY === 0) {
+    // Copy native vector page when no raster edits have been applied
+    const isUneditedPdf = (
+      pageItem.sourceType === 'pdf' &&
+      pageItem.pdfBytes &&
+      !pageItem.imageRotation &&
+      pageItem.pageLandscape === pageItem.sourceLandscape &&
+      !pageItem.imageCrop &&
+      pageItem.imageScale === 1.0 &&
+      pageItem.imageOffsetX === 0 &&
+      pageItem.imageOffsetY === 0
+    );
+
+    if (isUneditedPdf) {
       try {
-        const srcPdf = await PDFDocument.load(pageItem.pdfBytes);
+        let srcPdf = srcPdfCache.get(pageItem.pdfBytes);
+        if (!srcPdf) {
+          srcPdf = await PDFDocument.load(pageItem.pdfBytes);
+          srcPdfCache.set(pageItem.pdfBytes, srcPdf);
+        }
         const [copiedPage] = await pdfDoc.copyPages(srcPdf, [pageItem.pdfPageIndex]);
-        
-        // Match user's landscape or rotation request
+
         if (pageItem.rotation) {
           copiedPage.setRotation(degrees(pageItem.rotation));
         }
@@ -52,7 +83,7 @@ export async function buildPdfDocument(onProgress = null) {
       }
     }
 
-    // Standard Page Generation (Image, Text, Docx, or modified PDF)
+    // Standard Page Generation (Image, Text, Docx, 3D, or modified PDF)
     const newPage = pdfDoc.addPage([ptW, ptH]);
 
     if (pageItem.sourceImage) {
@@ -61,7 +92,7 @@ export async function buildPdfDocument(onProgress = null) {
   }
 
   // Draw Page Numbers if enabled
-  if (state.settings.pageNumbers) {
+  if (state.settings.pageNumbers && fontMap) {
     drawPageNumbers(pdfDoc, fontMap);
   }
 
@@ -74,16 +105,14 @@ export async function buildPdfDocument(onProgress = null) {
  * rotation, offsets, and hard clipping at page boundaries.
  */
 async function drawImageOnPage(pdfDoc, page, pageItem, pw, ph) {
-  const { degrees } = window.PDFLib;
   const img = pageItem.sourceImage;
-  let natW = img.naturalWidth || img.width;
-  let natH = img.naturalHeight || img.height;
+  const natW = img.naturalWidth || img.width;
+  const natH = img.naturalHeight || img.height;
 
   if (!natW || !natH) return;
 
-  // We render the cropped/rotated/scaled image onto an offscreen canvas at high resolution
-  // to ensure crisp vector-like 300 DPI print quality without memory leaks
-  const dpr = 2.0; // High quality output
+  const preset = QUALITY_PRESETS[state.settings.exportQuality] || QUALITY_PRESETS.archival;
+  const dpr = preset.dpr;
   const renderCanvas = document.createElement('canvas');
   renderCanvas.width = Math.round(pw * dpr);
   renderCanvas.height = Math.round(ph * dpr);
@@ -95,48 +124,36 @@ async function drawImageOnPage(pdfDoc, page, pageItem, pw, ph) {
   ctx.rect(0, 0, renderCanvas.width, renderCanvas.height);
   ctx.clip();
 
-  // White base
+  // White paper base
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, renderCanvas.width, renderCanvas.height);
 
-  // Scaled geometry
-  const rot = (pageItem.imageRotation || 0) % 360;
-  const isSwapped = rot === 90 || rot === 270;
-  const effW = isSwapped ? natH : natW;
-  const effH = isSwapped ? natW : natH;
+  const geom = computePageImageGeometry(natW, natH, renderCanvas.width, renderCanvas.height, {
+    imageRotation: pageItem.imageRotation,
+    imageScale: pageItem.imageScale,
+    imageOffsetX: pageItem.imageOffsetX,
+    imageOffsetY: pageItem.imageOffsetY,
+    imageCrop: pageItem.imageCrop,
+    unitScale: dpr,
+    defaultFit: state.settings.defaultImageFit || 'fill'
+  });
 
-  const fitScale = Math.min((pw * dpr) / effW, (ph * dpr) / effH);
-  const finalScale = fitScale * (pageItem.imageScale || 1.0);
-
-  const dispW = effW * finalScale;
-  const dispH = effH * finalScale;
-
-  const cx = (pw * dpr) / 2 + (pageItem.imageOffsetX || 0) * dpr;
-  const cy = (ph * dpr) / 2 + (pageItem.imageOffsetY || 0) * dpr;
-
-  ctx.translate(cx, cy);
-  if (rot !== 0) {
-    ctx.rotate((rot * Math.PI) / 180);
-  }
-
-  if (pageItem.imageCrop) {
-    const [cl, ct, cr, cb] = pageItem.imageCrop;
-    const sx = cl * natW;
-    const sy = ct * natH;
-    const sw = (cr - cl) * natW;
-    const sh = (cb - ct) * natH;
-    ctx.drawImage(img, sx, sy, sw, sh, -dispW / 2, -dispH / 2, dispW, dispH);
-  } else {
-    const dw = isSwapped ? dispH : dispW;
-    const dh = isSwapped ? dispW : dispH;
-    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+  if (geom) {
+    ctx.translate(geom.cx, geom.cy);
+    if (geom.rad !== 0) {
+      ctx.rotate(geom.rad);
+    }
+    ctx.drawImage(
+      img,
+      geom.sx, geom.sy, geom.sw, geom.sh,
+      -geom.drawW / 2, -geom.drawH / 2, geom.drawW, geom.drawH
+    );
   }
 
   ctx.restore();
 
-  // Export to JPEG bytes (92% quality)
-  const dataUrl = renderCanvas.toDataURL('image/jpeg', 0.92);
-  const imgBytes = await fetch(dataUrl).then(res => res.arrayBuffer());
+  const dataUrl = renderCanvas.toDataURL('image/jpeg', preset.jpegQuality);
+  const imgBytes = dataUrlToUint8Array(dataUrl);
   const embeddedImage = await pdfDoc.embedJpg(imgBytes);
 
   page.drawImage(embeddedImage, {
@@ -158,7 +175,8 @@ function drawPageNumbers(pdfDoc, fontMap) {
 
   const font = fontMap[s.pageNumberFont] || fontMap['Helvetica'];
   const fontSize = s.pageNumberFontSize || 10;
-  const color = parseHexColor(s.pageNumberColor || '#1e293b', rgb);
+  const { r, g, b } = parseHexColorRgb01(s.pageNumberColor || '#1e293b');
+  const color = rgb(r, g, b);
 
   for (let i = 0; i < total; i++) {
     if (i === 0 && s.skipCoverPage) continue;
@@ -166,11 +184,7 @@ function drawPageNumbers(pdfDoc, fontMap) {
     const page = docPages[i];
     const { width, height } = page.getSize();
     const pageNum = i + 1;
-
-    let text = `${pageNum}`;
-    if (s.pageNumberStyle === 'dashes') text = `— ${pageNum} —`;
-    else if (s.pageNumberStyle === 'page_x') text = `Page ${pageNum}`;
-    else if (s.pageNumberStyle === 'page_x_of_y') text = `Page ${pageNum} of ${total}`;
+    const text = formatPageNumberText(pageNum, total, s.pageNumberStyle);
 
     const textWidth = font.widthOfTextAtSize(text, fontSize);
     const textHeight = font.heightAtSize(fontSize);
@@ -188,23 +202,13 @@ function drawPageNumbers(pdfDoc, fontMap) {
     }
 
     page.drawText(text, {
-      x,
-      y,
+      x: Math.max(0, x),
+      y: Math.max(0, y),
       size: fontSize,
       font,
       color
     });
   }
-}
-
-function parseHexColor(hex, rgb) {
-  let c = hex.replace('#', '');
-  if (c.length === 3) c = c.split('').map(x => x + x).join('');
-  const num = parseInt(c, 16);
-  const r = ((num >> 16) & 255) / 255;
-  const g = ((num >> 8) & 255) / 255;
-  const b = (num & 255) / 255;
-  return rgb(r, g, b);
 }
 
 /**

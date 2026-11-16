@@ -20,266 +20,576 @@
   <!-- Top App Header -->
   <header class="app-header">
     <div class="brand">
-      <img class="brand-logo" src="assets/paper-nautilus-logo.jpg" alt="">
-      <h1>Paper Nautilus</h1>
-      <span class="brand-badge">PDF Maker · Web Edition</span><a class="home-link" href="https://pdfmaker.11mosswood.us/">← TripoFisch</a>
+      <img class="brand-logo" src="assets/paper-nautilus-logo.jpg" alt="Paper Nautilus logo">
+      <div class="brand-title-group">
+        <h1>Paper Nautilus</h1>
+        <span class="brand-badge">PDF Maker</span>
+      </div>
+      <a class="home-link" href="https://pdfmaker.11mosswood.us/">← TripoFisch</a>
     </div>
 
     <div class="header-actions">
       <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.svg,.pdf,.docx,.txt,.md,.csv,.gltf,.glb" class="hidden">
-      
-      <button id="btn-add-files" class="btn btn-secondary">
-        <span>➕</span> Add Files
+
+      <button type="button" id="btn-command-palette" class="btn btn-secondary btn-palette" title="Search commands, pages &amp; recent items (Ctrl/Cmd+K)">
+        <span class="btn-emoji">⌘</span>
+        <span class="btn-label">Search</span>
+        <kbd class="kbd-hint">Ctrl+K</kbd>
       </button>
 
-      <button id="btn-shrink-pdf" class="btn btn-secondary" title="Compress or shrink an existing PDF file">
-        <span>🗜️</span> Shrink PDF
+      <button type="button" id="btn-add-files" class="btn btn-secondary" title="Add files (A)">
+        <span class="btn-emoji">➕</span>
+        <span class="btn-label">Add Files</span>
       </button>
 
-      <button id="btn-clear-all" class="btn btn-secondary btn-sm" title="Clear all pages">
-        <span>🗑️</span> Clear
+      <button type="button" id="btn-shrink-pdf" class="btn btn-secondary" title="Compress an existing PDF (S)">
+        <span class="btn-emoji">🗜️</span>
+        <span class="btn-label">Shrink PDF</span>
       </button>
 
-      <button id="theme-toggle" class="btn btn-secondary btn-sm" title="Toggle Dark/Light Mode">
+      <button type="button" id="btn-open-settings" class="btn btn-secondary" title="Open Document Settings (G)">
+        <span class="btn-emoji">⚙️</span>
+        <span class="btn-label">Settings</span>
+      </button>
+
+      <button type="button" id="btn-clear-all" class="btn btn-secondary" title="Clear all pages" disabled>
+        <span class="btn-emoji">🗑️</span>
+        <span class="btn-label-desktop">Clear</span>
+      </button>
+
+      <button type="button" id="theme-toggle" class="btn btn-secondary btn-icon" title="Toggle Dark/Light Theme (T)" aria-label="Toggle theme">
         ☀️
       </button>
 
-      <button id="btn-export-pdf" class="btn btn-primary">
-        <span>💾</span> Download PDF
+      <button type="button" id="btn-shortcuts" class="btn btn-secondary btn-icon" title="Keyboard Shortcuts (?)" aria-label="Keyboard shortcuts">
+        ?
+      </button>
+
+      <button type="button" id="btn-export-pdf" class="btn btn-primary" title="Download assembled PDF (E)">
+        <span class="btn-emoji">💾</span>
+        <span class="btn-label">Download PDF</span>
       </button>
     </div>
   </header>
 
-  <p class="local-processing-note">Your files are processed on this device. No document uploads. <a href="vendor/THIRD-PARTY-NOTICES.txt">Third-party notices</a></p>
-  <!-- Animated Import Progress Bar -->
-  <div id="import-progress-container" class="import-progress-banner hidden">
+  <p class="local-processing-note">
+    Your files are processed locally on this device. No document uploads.
+    <a href="vendor/THIRD-PARTY-NOTICES.txt">Third-party notices</a>
+  </p>
+
+  <!-- Mobile / Tablet Workspace Pane Switcher (visible <= 960px) -->
+  <nav class="workspace-mobile-tabs" aria-label="Workspace sections">
+    <button type="button" class="mobile-tab-btn active" data-pane="pages">
+      📋 Pages <span id="mobile-tab-count" class="mobile-tab-badge">0</span>
+    </button>
+    <button type="button" class="mobile-tab-btn" data-pane="preview">
+      👁️ Preview
+    </button>
+    <button type="button" class="mobile-tab-btn" data-pane="editor">
+      ✏️ Editor
+    </button>
+  </nav>
+
+  <!-- Animated Import / Export Progress Bar -->
+  <div id="import-progress-container" class="import-progress-banner hidden" role="status" aria-live="polite">
     <div id="import-progress-fill" class="progress-fill"></div>
     <div id="import-progress-text" class="progress-text">Importing…</div>
   </div>
 
   <!-- Main 3-Column Workspace -->
-  <main class="app-workspace">
+  <main class="app-workspace" data-active-pane="pages">
 
     <!-- Left Column: Document Pages Queue -->
-    <aside class="pages-panel">
+    <aside class="pages-panel" data-pane="pages">
       <div class="panel-header">
         <span class="panel-title">Document Pages</span>
         <span id="page-count-badge" class="badge badge-image">0 pages</span>
       </div>
 
-      <div id="drop-zone" class="drop-zone-mini">
+      <div id="drop-zone" class="drop-zone-mini" tabindex="0" role="button" aria-label="Drop files or click to add pages">
         <div class="drop-zone-icon">📥</div>
-        <div class="drop-zone-text">Drop files here</div>
+        <div class="drop-zone-text">Drop files here or click to browse</div>
         <div class="drop-zone-sub">Images, PDF, Word DOCX, Text, 3D</div>
       </div>
 
       <div id="pages-list" class="pages-list-container">
-        <!-- Dynamically rendered Page Cards -->
+        <!-- Dynamically rendered Page Cards or Empty State -->
       </div>
     </aside>
 
     <!-- Center Column: Live Interactive Canvas Preview -->
-    <section class="preview-panel">
+    <section class="preview-panel" data-pane="preview">
       <div class="preview-toolbar">
         <div class="preview-nav">
-          <button id="btn-prev-page" class="btn btn-secondary btn-sm" title="Previous page">◀</button>
+          <button type="button" id="btn-prev-page" class="btn btn-secondary btn-sm" title="Previous page ([ or ←)" disabled>◀</button>
           <span id="page-indicator" class="page-indicator">0 / 0</span>
-          <button id="btn-next-page" class="btn btn-secondary btn-sm" title="Next page">▶</button>
+          <button type="button" id="btn-next-page" class="btn btn-secondary btn-sm" title="Next page (] or →)" disabled>▶</button>
         </div>
 
         <div class="preview-zoom">
-          <button id="btn-zoom-out" class="btn btn-secondary btn-sm" title="Zoom out">−</button>
+          <button type="button" id="btn-zoom-out" class="btn btn-secondary btn-sm" title="Zoom out (-)" disabled>−</button>
           <span id="zoom-level-label" class="zoom-level">80%</span>
-          <button id="btn-zoom-in" class="btn btn-secondary btn-sm" title="Zoom in">+</button>
-          <button id="btn-zoom-fit" class="btn btn-secondary btn-sm" title="Fit to page">Fit</button>
+          <button type="button" id="btn-zoom-in" class="btn btn-secondary btn-sm" title="Zoom in (+)" disabled>+</button>
+          <button type="button" id="btn-zoom-fit" class="btn btn-secondary btn-sm" title="Fit to page (F)" disabled>Fit</button>
         </div>
       </div>
 
       <div id="canvas-container" class="canvas-container">
-        <!-- Interactive Canvas will be mounted here -->
+        <!-- Helpful Empty State Overlay -->
+        <div id="preview-empty-state" class="preview-empty-overlay">
+          <div class="empty-state-card empty-state-hero">
+            <div class="empty-state-icon">📐</div>
+            <h2 class="empty-state-title">Interactive Page Canvas</h2>
+            <p class="empty-state-desc">
+              This workspace previews every page in your final PDF. Resize images with corner handles, rotate content, reorder pages, and inspect live page numbering.
+            </p>
+            <div class="empty-state-actions">
+              <button type="button" id="btn-empty-add-files" class="btn btn-primary">
+                <span>➕</span> Add Files to Start
+              </button>
+              <button type="button" id="btn-empty-load-sample" class="btn btn-secondary">
+                <span>✨</span> Load 3-Page Sample Report
+              </button>
+            </div>
+            <div class="empty-format-pills">
+              <span class="badge badge-image">Images</span>
+              <span class="badge badge-pdf">PDF</span>
+              <span class="badge badge-docx">DOCX</span>
+              <span class="badge badge-text">Text / CSV</span>
+              <span class="badge badge-3d">3D GLTF</span>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
-    <!-- Right Column: Page Editor & Settings -->
-    <aside class="editor-panel">
+    <!-- Right Column: Page Editor & Document Settings -->
+    <aside class="editor-panel" data-pane="editor">
       <div class="panel-header">
-        <span class="panel-title">Page & Document Editor</span>
+        <span class="panel-title">Page &amp; Document Editor</span>
+        <button type="button" id="btn-open-full-settings" class="btn btn-secondary btn-sm">⚙️ All</button>
       </div>
 
-      <div id="empty-editor-message" class="empty-state">
-        <p>No page selected.</p>
-        <p class="text-muted" style="margin-top: 0.5rem;">Add files or click a page from the left panel to edit its orientation, rotation, or scale.</p>
-      </div>
-
-      <div id="page-editor-controls" class="editor-content hidden">
-
-        <!-- Page Orientation -->
-        <div class="editor-section">
-          <span class="section-label">Page Orientation</span>
-          <div class="button-group-duo">
-            <label class="radio-card">
-              <input type="radio" name="page-orientation" id="orient-portrait" value="portrait" checked>
-              <span>📄 Portrait</span>
-            </label>
-            <label class="radio-card">
-              <input type="radio" name="page-orientation" id="orient-landscape" value="landscape">
-              <span>📄 Landscape</span>
-            </label>
+      <div class="editor-scroll">
+        <!-- Empty Page Inspector State -->
+        <div id="empty-editor-message" class="empty-state-wrap">
+          <div class="empty-state-card">
+            <div class="empty-state-icon">🎛️</div>
+            <div class="empty-state-title">No Page Selected</div>
+            <p class="empty-state-desc">
+              Select a page from Document Pages to adjust its orientation, image rotation, scale, or order.
+            </p>
+            <div class="empty-state-actions">
+              <button type="button" id="btn-editor-add-files" class="btn btn-primary btn-sm">➕ Add Files</button>
+              <button type="button" id="btn-editor-load-sample" class="btn btn-secondary btn-sm">✨ Try Sample</button>
+            </div>
           </div>
         </div>
 
-        <!-- Image Content Rotation -->
-        <div class="editor-section">
-          <span class="section-label">Rotate Image Content</span>
-          <div class="button-group-grid">
-            <button id="btn-rotate-0" class="btn btn-secondary btn-sm">0°</button>
-            <button id="btn-rotate-90" class="btn btn-secondary btn-sm">+90°</button>
-            <button id="btn-rotate-180" class="btn btn-secondary btn-sm">180°</button>
-            <button id="btn-rotate-270" class="btn btn-secondary btn-sm">270°</button>
-          </div>
-        </div>
-
-        <!-- Scale & Geometry -->
-        <div class="editor-section">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span class="section-label">Image Scale</span>
-            <button id="btn-fit-scale" class="btn btn-secondary btn-sm" style="font-size:0.65rem;">Reset / Fit</button>
-          </div>
-          <div class="slider-row">
-            <input type="range" id="scale-slider" min="10" max="300" value="100">
-            <span id="scale-value-label" class="slider-value">100%</span>
-          </div>
-          <p class="text-muted" style="font-size: 0.7rem;">
-            Tip: You can also drag the <strong>green corner handles</strong> directly on the canvas to resize, and drag inside to move.
-          </p>
-        </div>
-
-        <!-- Page Actions -->
-        <div class="editor-section">
-          <span class="section-label">Page Order</span>
-          <div class="button-group-duo">
-            <button id="btn-move-up" class="btn btn-secondary btn-sm">▲ Move Up</button>
-            <button id="btn-move-down" class="btn btn-secondary btn-sm">▼ Move Down</button>
-          </div>
-          <button id="btn-delete-page" class="btn btn-danger btn-sm" style="margin-top: 0.3rem;">🗑️ Delete Page</button>
-        </div>
-
-        <hr style="border: none; border-top: 1px solid var(--border-color);">
-
-        <!-- Page Numbering Configuration -->
-        <div class="editor-section">
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <input type="checkbox" id="chk-page-numbers">
-            <label for="chk-page-numbers" style="font-size:0.85rem; font-weight:600; cursor:pointer;">
-              Enable Page Numbers
-            </label>
-          </div>
-
-          <div id="page-numbers-config" class="hidden" style="display:flex; flex-direction:column; gap:0.6rem; margin-top:0.4rem;">
-            <div class="form-group">
-              <label class="form-label">Position</label>
-              <select id="num-position" class="form-select">
-                <option value="bottom">Bottom of page</option>
-                <option value="top">Top of page</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Alignment</label>
-              <select id="num-alignment" class="form-select">
-                <option value="center">Center</option>
-                <option value="right">Right</option>
-                <option value="left">Left</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Style</label>
-              <select id="num-style" class="form-select">
-                <option value="plain">1, 2, 3</option>
-                <option value="dashes">— 1 —, — 2 —</option>
-                <option value="page_x">Page 1, Page 2</option>
-                <option value="page_x_of_y">Page 1 of N</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Font Family & Size</label>
-              <div style="display:flex; gap:0.5rem;">
-                <select id="num-font" class="form-select" style="flex:1;">
-                  <option value="Helvetica">Helvetica</option>
-                  <option value="Helvetica-Bold">Helvetica Bold</option>
-                  <option value="Times-Roman">Times New Roman</option>
-                  <option value="Times-Bold">Times Bold</option>
-                  <option value="Courier">Courier</option>
-                  <option value="Courier-Bold">Courier Bold</option>
-                </select>
-                <input type="number" id="num-size" class="form-input" min="6" max="36" value="10" style="width:60px;">
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Color</label>
-              <div class="color-picker-row">
-                <input type="color" id="num-color" class="form-color" value="#1e293b">
-                <span style="font-size:0.75rem; color:var(--text-muted);">Text color</span>
-              </div>
-            </div>
-
-            <div style="display:flex; align-items:center; gap:0.4rem; margin-top:0.2rem;">
-              <input type="checkbox" id="chk-skip-cover">
-              <label for="chk-skip-cover" style="font-size:0.75rem; color:var(--text-secondary); cursor:pointer;">
-                Skip numbering first page (Cover)
+        <!-- Per-Page Controls -->
+        <div id="page-editor-controls" class="editor-content hidden">
+          <!-- Page Orientation -->
+          <div class="editor-section">
+            <span class="section-label">Page Orientation</span>
+            <div class="button-group-duo">
+              <label class="radio-card">
+                <input type="radio" name="page-orientation" id="orient-portrait" value="portrait" checked>
+                <span>📄 Portrait</span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="page-orientation" id="orient-landscape" value="landscape">
+                <span>🖼️ Landscape</span>
               </label>
             </div>
           </div>
-        </div>
 
-        <hr style="border: none; border-top: 1px solid var(--border-color);">
-
-        <!-- Document Global Settings -->
-        <div class="editor-section">
-          <span class="section-label">Document Settings</span>
-
-          <div class="form-group">
-            <label class="form-label">Page Size</label>
-            <select id="doc-page-size" class="form-select">
-              <option value="A4">A4 (210 × 297 mm)</option>
-              <option value="Letter">US Letter (8.5 × 11 in)</option>
-            </select>
+          <!-- Image Content Rotation -->
+          <div class="editor-section">
+            <span class="section-label">Rotate Image Content</span>
+            <div class="button-group-grid">
+              <button type="button" id="btn-rotate-0" class="btn btn-secondary btn-sm" data-rot="0">0°</button>
+              <button type="button" id="btn-rotate-90" class="btn btn-secondary btn-sm" data-rot="90">+90°</button>
+              <button type="button" id="btn-rotate-180" class="btn btn-secondary btn-sm" data-rot="180">180°</button>
+              <button type="button" id="btn-rotate-270" class="btn btn-secondary btn-sm" data-rot="270">270°</button>
+            </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Output Filename</label>
-            <input type="text" id="doc-filename" class="form-input" value="Report.pdf">
+          <!-- Scale & Geometry -->
+          <div class="editor-section">
+            <div class="section-header-row">
+              <span class="section-label">Image Scale</span>
+              <button type="button" id="btn-fit-scale" class="btn btn-secondary btn-sm btn-xs">Reset / Fit</button>
+            </div>
+            <div class="slider-row">
+              <input type="range" id="scale-slider" min="10" max="300" value="100" aria-label="Image scale percentage">
+              <span id="scale-value-label" class="slider-value">100%</span>
+            </div>
+            <p class="field-help">
+              Tip: Drag the <strong>green corner handles</strong> on the canvas to resize, or drag inside to reposition.
+            </p>
+          </div>
+
+          <!-- Page Actions -->
+          <div class="editor-section">
+            <span class="section-label">Page Order</span>
+            <div class="button-group-duo">
+              <button type="button" id="btn-move-up" class="btn btn-secondary btn-sm">▲ Move Up</button>
+              <button type="button" id="btn-move-down" class="btn btn-secondary btn-sm">▼ Move Down</button>
+            </div>
+            <button type="button" id="btn-delete-page" class="btn btn-danger btn-sm">🗑️ Delete Page</button>
           </div>
         </div>
 
+        <hr class="section-divider">
+
+        <!-- Quick Document Settings (always accessible) -->
+        <div class="editor-content editor-settings-block">
+          <div id="settings-quick-banner" class="settings-toast hidden" role="status"></div>
+
+          <!-- Group: Page Numbering -->
+          <div class="editor-section">
+            <span class="section-label">Page Numbering</span>
+            <label class="toggle-row" for="chk-page-numbers">
+              <input type="checkbox" id="chk-page-numbers">
+              <span class="toggle-text">
+                <strong>Enable Page Numbers</strong>
+                <small>Show live page numbers across your exported PDF.</small>
+              </span>
+            </label>
+
+            <div id="page-numbers-config" class="settings-subpanel hidden">
+              <div class="form-group">
+                <label class="form-label" for="num-style">Format Style</label>
+                <select id="num-style" class="form-select">
+                  <option value="page_x_of_y">Page 1 of N</option>
+                  <option value="page_x">Page 1, Page 2</option>
+                  <option value="plain">1, 2, 3</option>
+                  <option value="dashes">— 1 —, — 2 —</option>
+                </select>
+              </div>
+
+              <div class="form-row-duo">
+                <div class="form-group">
+                  <label class="form-label" for="num-position">Position</label>
+                  <select id="num-position" class="form-select">
+                    <option value="bottom">Bottom</option>
+                    <option value="top">Top</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="num-alignment">Alignment</label>
+                  <select id="num-alignment" class="form-select">
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                    <option value="left">Left</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="num-font">Font &amp; Size (pt)</label>
+                <div class="form-row-inline">
+                  <select id="num-font" class="form-select flex-1">
+                    <option value="Helvetica">Helvetica</option>
+                    <option value="Helvetica-Bold">Helvetica Bold</option>
+                    <option value="Times-Roman">Times New Roman</option>
+                    <option value="Times-Bold">Times Bold</option>
+                    <option value="Courier">Courier</option>
+                    <option value="Courier-Bold">Courier Bold</option>
+                  </select>
+                  <input type="number" id="num-size" class="form-input input-num-sm" min="6" max="36" value="10" aria-label="Font size">
+                </div>
+              </div>
+
+              <div class="form-row-between">
+                <label class="color-picker-row" for="num-color">
+                  <input type="color" id="num-color" class="form-color" value="#1e293b">
+                  <span class="form-label">Text Color</span>
+                </label>
+
+                <label class="checkbox-inline" for="chk-skip-cover">
+                  <input type="checkbox" id="chk-skip-cover">
+                  <span>Skip page 1</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <hr class="section-divider">
+
+          <!-- Group: Document & Export -->
+          <div class="editor-section">
+            <span class="section-label">Document &amp; Export</span>
+
+            <div class="form-group">
+              <label class="form-label" for="doc-page-size">Page Size</label>
+              <select id="doc-page-size" class="form-select">
+                <option value="A4">A4 (210 × 297 mm)</option>
+                <option value="Letter">US Letter (8.5 × 11 in)</option>
+              </select>
+              <span class="field-help">Standard paper geometry applied to newly formatted pages.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="doc-export-quality">Export Quality</label>
+              <select id="doc-export-quality" class="form-select">
+                <option value="archival">Archival (High DPI · 92% JPEG)</option>
+                <option value="balanced">Balanced (150 DPI · 80% JPEG)</option>
+                <option value="compact">Compact (96 DPI · Smaller File)</option>
+              </select>
+              <span class="field-help">Balances visual crispness against final PDF file size.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="doc-filename">Output Filename</label>
+              <input type="text" id="doc-filename" class="form-input" value="Report.pdf">
+            </div>
+          </div>
+        </div>
       </div>
     </aside>
 
   </main>
 
-  <!-- Modal: Shrink / Compress PDF Tool -->
-  <div id="modal-shrink" class="modal-overlay hidden">
-    <div class="modal-box">
+  <!-- Modal: Command Palette (Cmd/Ctrl+K) -->
+  <div id="modal-command-palette" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Command Palette">
+    <div class="modal-box palette-box">
+      <div class="palette-search-bar">
+        <span class="palette-search-icon">⌘K</span>
+        <input type="text" id="cmd-palette-input" class="palette-input" placeholder="Search pages, actions, settings, or recent items…" autocomplete="off">
+        <button type="button" id="btn-close-palette" class="btn-close" aria-label="Close command palette">&times;</button>
+      </div>
+      <div id="cmd-palette-results" class="palette-results">
+        <!-- Populated dynamically -->
+      </div>
+      <div class="palette-footer">
+        <span><kbd class="kbd-mini">↑↓</kbd> Navigate</span>
+        <span><kbd class="kbd-mini">↵</kbd> Run</span>
+        <span><kbd class="kbd-mini">Esc</kbd> Close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Keyboard Shortcuts Overlay (?) -->
+  <div id="modal-shortcuts" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-modal-title">
+    <div class="modal-box modal-box-wide">
       <div class="modal-header">
-        <h2>🗜️ Shrink a PDF</h2>
-        <button id="btn-close-shrink" class="btn-close">&times;</button>
+        <h2 id="shortcuts-modal-title">⌨️ Keyboard Shortcuts</h2>
+        <button type="button" id="btn-close-shortcuts" class="btn-close" aria-label="Close shortcuts">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="field-help">
+          Shortcuts are automatically paused while typing in text fields, filename boxes, or search inputs.
+        </p>
+        <div id="shortcuts-modal-body"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btn-done-shortcuts" class="btn btn-primary btn-sm">Got It</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Full Grouped Settings -->
+  <div id="modal-settings" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-header">
+        <h2 id="settings-modal-title">⚙️ Document &amp; App Settings</h2>
+        <button type="button" id="btn-close-settings" class="btn-close" aria-label="Close settings">&times;</button>
       </div>
 
-      <div class="modal-body">
+      <div class="modal-body modal-body-scroll">
+        <div id="settings-save-banner" class="settings-save-banner hidden" role="status"></div>
+
+        <!-- Group 1: Document Layout & Import Defaults -->
+        <section class="settings-group">
+          <h3 class="settings-group-title">1. Document Layout &amp; Import Defaults</h3>
+          <p class="settings-group-desc">Configure standard dimensions and default placement for imported files.</p>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-page-size">Page Size</label>
+              <p class="setting-desc">Paper dimensions used for rendered pages and PDF export.</p>
+            </div>
+            <select id="set-page-size" class="form-select setting-control">
+              <option value="A4">A4 (210 × 297 mm)</option>
+              <option value="Letter">US Letter (8.5 × 11 in)</option>
+            </select>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-default-orientation">Default Import Orientation</label>
+              <p class="setting-desc">Automatically match source orientation or force Portrait/Landscape on import.</p>
+            </div>
+            <select id="set-default-orientation" class="form-select setting-control">
+              <option value="auto">Auto (Match Source)</option>
+              <option value="portrait">Always Portrait</option>
+              <option value="landscape">Always Landscape</option>
+            </select>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-default-image-fit">Image Framing</label>
+              <p class="setting-desc">Fill the page edge-to-edge or keep clean white margins around images.</p>
+            </div>
+            <select id="set-default-image-fit" class="form-select setting-control">
+              <option value="fill">Edge-to-Edge Fill</option>
+              <option value="margin">Fit with Page Margins</option>
+            </select>
+          </div>
+        </section>
+
+        <!-- Group 2: Page Numbering & Header/Footer -->
+        <section class="settings-group">
+          <h3 class="settings-group-title">2. Page Numbering &amp; Header/Footer</h3>
+          <p class="settings-group-desc">Stamp customizable page numbers consistently across your report. Edge spacing is tuned automatically.</p>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-page-numbers">Enable Page Numbers</label>
+              <p class="setting-desc">Display page numbers in the live preview and exported PDF.</p>
+            </div>
+            <input type="checkbox" id="set-page-numbers" class="setting-checkbox">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-skip-cover">Skip Cover Page (Page 1)</label>
+              <p class="setting-desc">Keep your title page unnumbered while numbering subsequent pages.</p>
+            </div>
+            <input type="checkbox" id="set-skip-cover" class="setting-checkbox">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-num-style">Number Format</label>
+              <p class="setting-desc">Choose between compact digits or full "Page 1 of N" labels.</p>
+            </div>
+            <select id="set-num-style" class="form-select setting-control">
+              <option value="page_x_of_y">Page 1 of N</option>
+              <option value="page_x">Page 1, Page 2</option>
+              <option value="plain">1, 2, 3</option>
+              <option value="dashes">— 1 —, — 2 —</option>
+            </select>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-num-position">Placement &amp; Alignment</label>
+              <p class="setting-desc">Position numbers in the header or footer and align left, center, or right.</p>
+            </div>
+            <div class="form-row-inline setting-control">
+              <select id="set-num-position" class="form-select flex-1">
+                <option value="bottom">Bottom</option>
+                <option value="top">Top</option>
+              </select>
+              <select id="set-num-alignment" class="form-select flex-1">
+                <option value="center">Center</option>
+                <option value="left">Left</option>
+                <option value="right">Right</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-num-font">Typography &amp; Color</label>
+              <p class="setting-desc">Standard PDF font face, size in points, and ink color.</p>
+            </div>
+            <div class="form-row-inline setting-control">
+              <select id="set-num-font" class="form-select flex-1">
+                <option value="Helvetica">Helvetica</option>
+                <option value="Helvetica-Bold">Helvetica Bold</option>
+                <option value="Times-Roman">Times New Roman</option>
+                <option value="Times-Bold">Times Bold</option>
+                <option value="Courier">Courier</option>
+                <option value="Courier-Bold">Courier Bold</option>
+              </select>
+              <input type="number" id="set-num-size" class="form-input input-num-sm" min="6" max="36" value="10" aria-label="Number font size">
+              <input type="color" id="set-num-color" class="form-color" value="#1e293b" aria-label="Number color">
+            </div>
+          </div>
+        </section>
+
+        <!-- Group 3: Export, Quality & Appearance -->
+        <section class="settings-group">
+          <h3 class="settings-group-title">3. Export, Quality &amp; Appearance</h3>
+          <p class="settings-group-desc">Control output file naming, export compression preset, and workspace theme.</p>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-output-filename">Default Output Filename</label>
+              <p class="setting-desc">Filename suggested when saving your assembled PDF report.</p>
+            </div>
+            <input type="text" id="set-output-filename" class="form-input setting-control" value="Report.pdf">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-export-quality">Export Image Quality</label>
+              <p class="setting-desc">Choose high-DPI archival fidelity or compact sizes for email sharing.</p>
+            </div>
+            <select id="set-export-quality" class="form-select setting-control">
+              <option value="archival">Archival (High DPI · 92% JPEG)</option>
+              <option value="balanced">Balanced (150 DPI · 80% JPEG)</option>
+              <option value="compact">Compact (96 DPI · Smaller File)</option>
+            </select>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-theme">Workspace Theme</label>
+              <p class="setting-desc">Switch between high-contrast dark studio mode and crisp light mode.</p>
+            </div>
+            <select id="set-theme" class="form-select setting-control">
+              <option value="dark">Dark Mode</option>
+              <option value="light">Light Mode</option>
+            </select>
+          </div>
+        </section>
+
+        <div id="settings-pending-diff" class="pending-diff-box"></div>
+      </div>
+
+      <div class="modal-footer modal-footer-between">
+        <button type="button" id="btn-reset-settings" class="btn btn-secondary btn-sm">↺ Reset Defaults</button>
+        <div class="modal-footer-actions">
+          <button type="button" id="btn-cancel-settings" class="btn btn-secondary btn-sm">Cancel</button>
+          <button type="button" id="btn-save-settings" class="btn btn-primary btn-sm">✓ Save Settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Shrink / Compress PDF Tool -->
+  <div id="modal-shrink" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shrink-modal-title">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2 id="shrink-modal-title">🗜️ Shrink a PDF</h2>
+        <button type="button" id="btn-close-shrink" class="btn-close" aria-label="Close shrink modal">&times;</button>
+      </div>
+
+      <div class="modal-body modal-body-scroll">
         <input type="file" id="shrink-file-input" accept=".pdf" class="hidden">
-        
-        <div id="shrink-drop-zone" class="drop-zone-mini">
+
+        <div id="shrink-drop-zone" class="drop-zone-mini" tabindex="0" role="button">
           <div class="drop-zone-icon">📄</div>
           <div class="drop-zone-text">Click or drag a PDF here to compress</div>
-          <div class="drop-zone-sub">Processes PDFs entirely inside your browser. Compression rasterizes pages and can remove searchable text and links.</div>
+          <div class="drop-zone-sub">Processes entirely inside your browser. Original file is kept if compression does not shrink size.</div>
         </div>
 
-        <div id="shrink-file-details" class="hidden" style="background:var(--bg-primary); padding:0.75rem; border-radius:var(--radius); border:1px solid var(--border-color);">
-          <div style="font-weight:600; font-size:0.85rem;" id="shrink-file-name">file.pdf</div>
-          <div style="font-size:0.75rem; color:var(--text-muted);" id="shrink-file-size">0 KB</div>
+        <div id="shrink-empty-helper" class="shrink-empty-helper">
+          <span class="field-help">No PDF selected yet. Choose a PDF from disk or test compression right away:</span>
+          <div class="shrink-empty-actions">
+            <button type="button" id="btn-shrink-browse" class="btn btn-secondary btn-sm">📂 Select PDF</button>
+            <button type="button" id="btn-shrink-sample" class="btn btn-secondary btn-sm">📄 Use Sample PDF</button>
+          </div>
+        </div>
+
+        <div id="shrink-file-details" class="shrink-file-card hidden">
+          <div class="shrink-file-name" id="shrink-file-name">file.pdf</div>
+          <div class="shrink-file-size" id="shrink-file-size">0 KB</div>
         </div>
 
         <div class="editor-section">
@@ -303,28 +613,28 @@
             <label class="compression-card">
               <input type="radio" name="shrink-level" value="grayscale">
               <strong>Grayscale</strong>
-              <span>Black & White document</span>
+              <span>Black &amp; White document</span>
             </label>
           </div>
         </div>
 
-        <div id="shrink-progress" class="hidden" style="display:flex; flex-direction:column; gap:0.4rem;">
-          <div style="height:8px; background:var(--bg-tertiary); border-radius:4px; overflow:hidden;">
-            <div id="shrink-progress-bar" style="height:100%; width:0%; background:var(--accent-color); transition:width 0.2s;"></div>
+        <div id="shrink-progress" class="shrink-progress-wrap hidden">
+          <div class="shrink-progress-track">
+            <div id="shrink-progress-bar" class="shrink-progress-bar"></div>
           </div>
-          <span id="shrink-progress-text" style="font-size:0.75rem; color:var(--text-muted); text-align:center;">Compressing…</span>
+          <span id="shrink-progress-text" class="shrink-progress-text">Compressing…</span>
         </div>
 
         <div id="shrink-result" class="hidden shrink-result-box">
           <div id="shrink-result-details"></div>
-          <button id="btn-download-shrunk" class="btn btn-primary btn-sm" style="margin-top:0.4rem;">
+          <button type="button" id="btn-download-shrunk" class="btn btn-primary btn-sm">
             💾 Download Compressed PDF
           </button>
         </div>
       </div>
 
       <div class="modal-footer">
-        <button id="btn-start-compress" class="btn btn-primary" disabled>
+        <button type="button" id="btn-start-compress" class="btn btn-primary" disabled>
           Start Compression
         </button>
       </div>
@@ -332,22 +642,22 @@
   </div>
 
   <!-- Modal: 3D Model Viewer & Page Capturer -->
-  <div id="modal-3d" class="modal-overlay hidden">
-    <div class="modal-box" style="max-width: 720px;">
+  <div id="modal-3d" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="three-modal-title">
+    <div class="modal-box modal-box-wide">
       <div class="modal-header">
-        <h2>📦 3D Model Page Snapshot</h2>
-        <button id="btn-close-3d" class="btn-close">&times;</button>
+        <h2 id="three-modal-title">📦 3D Model Page Snapshot</h2>
+        <button type="button" id="btn-close-3d" class="btn-close" aria-label="Close 3D modal">&times;</button>
       </div>
 
       <div class="modal-body">
-        <p style="font-size: 0.8rem; color: var(--text-secondary);">
+        <p class="field-help">
           Rotate and zoom the 3D model with your mouse to your desired perspective, then click <strong>Capture to Page</strong>.
         </p>
         <div id="three-container" class="three-canvas-wrap"></div>
       </div>
 
       <div class="modal-footer">
-        <button id="btn-capture-3d" class="btn btn-primary">
+        <button type="button" id="btn-capture-3d" class="btn btn-primary">
           📸 Capture to Page
         </button>
       </div>

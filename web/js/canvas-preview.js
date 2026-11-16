@@ -5,10 +5,12 @@
  */
 
 import { state, getPageDimensions } from './state.js';
+import { computePageImageGeometry, formatPageNumberText } from './math-utils.js';
 
 export class CanvasPreview {
-  constructor(canvasContainerId) {
+  constructor(canvasContainerId, onZoomChange = null) {
     this.container = document.getElementById(canvasContainerId);
+    this.onZoomChange = onZoomChange;
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d');
     this.container.appendChild(this.canvas);
@@ -19,18 +21,17 @@ export class CanvasPreview {
 
     // Interaction state
     this.isDragging = false;
-    this.dragMode = null; // 'handle-nw' | 'handle-ne' | 'handle-sw' | 'handle-se' | 'pan' | 'crop-handle'
+    this.dragMode = null; // 'handle-nw' | 'handle-ne' | 'handle-sw' | 'handle-se' | 'pan'
     this.dragStartMouse = { x: 0, y: 0 };
     this.dragStartScale = 1.0;
     this.dragStartOffset = { x: 0, y: 0 };
-    this.dragStartCrop = null;
 
     // Geometry caches
     this.pageRect = { x: 0, y: 0, w: 0, h: 0 };
-    this.imgRect = { x: 0, y: 0, w: 0, h: 0 }; // unclipped image rect on canvas
-    this.handles = {}; // { nw: {x,y}, ne: {x,y}, sw: {x,y}, se: {x,y} }
+    this.imgRect = { x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0 };
+    this.handles = {};
 
-    this.HANDLE_SIZE = 8; // px radius
+    this.HANDLE_SIZE = 8; // px half-side
     this.HANDLE_HIT_RADIUS = 14;
 
     this.initEvents();
@@ -41,6 +42,16 @@ export class CanvasPreview {
       if (this.autoFit) this.fitToContainer();
       this.render();
     });
+
+    if (typeof ResizeObserver !== 'undefined' && this.container) {
+      this._resizeObserver = new ResizeObserver(() => {
+        if (this.container.clientWidth > 0 && this.container.clientHeight > 0) {
+          if (this.autoFit) this.fitToContainer();
+          this.render();
+        }
+      });
+      this._resizeObserver.observe(this.container);
+    }
 
     this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
     window.addEventListener('mousemove', (e) => this.onMouseMove(e));
@@ -59,7 +70,6 @@ export class CanvasPreview {
     this.canvas.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
-        const rect = this.canvas.getBoundingClientRect();
         this.onMouseDown({
           clientX: touch.clientX,
           clientY: touch.clientY,
@@ -88,7 +98,10 @@ export class CanvasPreview {
       this.render();
     });
     state.on('page_updated', () => this.render());
-    state.on('settings_updated', () => this.render());
+    state.on('settings_updated', () => {
+      if (this.autoFit) this.fitToContainer();
+      this.render();
+    });
   }
 
   fitToContainer() {
@@ -96,21 +109,30 @@ export class CanvasPreview {
     if (!page) return;
 
     const [ptW, ptH] = getPageDimensions(page.pageLandscape, state.settings.pageSize);
-    const containerW = this.container.clientWidth - 40;
-    const containerH = this.container.clientHeight - 40;
+    const pad = this.container.clientWidth < 500 ? 24 : 40;
+    const containerW = this.container.clientWidth - pad;
+    const containerH = this.container.clientHeight - pad;
 
     if (containerW <= 0 || containerH <= 0) return;
 
     const scaleX = containerW / ptW;
     const scaleY = containerH / ptH;
-    this.zoom = Math.min(scaleX, scaleY, 1.25);
+    this.zoom = Math.max(0.2, Math.min(scaleX, scaleY, 1.25));
     this.autoFit = true;
+    this.notifyZoom();
   }
 
   setZoom(zoom, autoFit = false) {
     this.zoom = zoom;
     this.autoFit = autoFit;
+    this.notifyZoom();
     this.render();
+  }
+
+  notifyZoom() {
+    if (typeof this.onZoomChange === 'function') {
+      this.onZoomChange(this.zoom);
+    }
   }
 
   render() {
@@ -129,19 +151,15 @@ export class CanvasPreview {
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
 
-    // Dark workspace background
+    // Workspace background
     const isDark = state.settings.theme === 'dark';
-    ctx.fillStyle = isDark ? '#14141e' : '#e2e8f0';
+    ctx.fillStyle = isDark ? '#090d16' : '#e2e8f0';
     ctx.fillRect(0, 0, cw, ch);
 
     const page = state.getCurrentPage();
     if (!page) {
-      // Empty state
-      ctx.fillStyle = isDark ? '#64748b' : '#94a3b8';
-      ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('No page selected. Add files to get started.', cw / 2, ch / 2);
+      this.handles = {};
+      this.imgRect = { x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0 };
       return;
     }
 
@@ -156,7 +174,7 @@ export class CanvasPreview {
 
     // Drop shadow
     ctx.save();
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
     ctx.shadowBlur = 18;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 6;
@@ -168,7 +186,7 @@ export class CanvasPreview {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(pageX, pageY, pageW, pageH);
 
-    // Clip rendering to the page boundaries (strict clipping as in python builder)
+    // Clip rendering to the page boundaries
     ctx.save();
     ctx.beginPath();
     ctx.rect(pageX, pageY, pageW, pageH);
@@ -182,14 +200,14 @@ export class CanvasPreview {
       this.renderPageNumber(ctx, page, pageX, pageY, pageW, pageH);
     }
 
-    ctx.restore(); // Restore clip
+    ctx.restore();
 
     // Page Border
     ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)';
     ctx.lineWidth = 1;
     ctx.strokeRect(pageX, pageY, pageW, pageH);
 
-    // Interactive Handles (only in resize mode when page has an image)
+    // Interactive Handles
     if (page.sourceImage) {
       if (state.editorMode === 'crop') {
         this.renderCropOverlay(ctx, page, pageX, pageY, pageW, pageH);
@@ -203,58 +221,42 @@ export class CanvasPreview {
     if (!page.sourceImage) return;
 
     const img = page.sourceImage;
-    let natW = img.naturalWidth || img.width;
-    let natH = img.naturalHeight || img.height;
+    const natW = img.naturalWidth || img.width;
+    const natH = img.naturalHeight || img.height;
 
-    if (!natW || !natH) return;
+    const geom = computePageImageGeometry(natW, natH, pw, ph, {
+      imageRotation: page.imageRotation,
+      imageScale: page.imageScale,
+      imageOffsetX: page.imageOffsetX,
+      imageOffsetY: page.imageOffsetY,
+      imageCrop: page.imageCrop,
+      unitScale: this.zoom,
+      defaultFit: state.settings.defaultImageFit || 'fill'
+    });
+    if (!geom) return;
 
-    // Image rotation (0, 90, 180, 270)
-    const rot = (page.imageRotation || 0) % 360;
-    const isSwapped = rot === 90 || rot === 270;
-    const effW = isSwapped ? natH : natW;
-    const effH = isSwapped ? natW : natH;
+    const cx = px + geom.cx;
+    const cy = py + geom.cy;
 
-    // Scale to fill page edge-to-edge then apply user scale
-    const fitScale = Math.min(pw / effW, ph / effH);
-    const finalScale = fitScale * (page.imageScale || 1.0);
-
-    const dispW = effW * finalScale;
-    const dispH = effH * finalScale;
-
-    // Center + user offset in screen pixels
-    const cx = px + pw / 2 + (page.imageOffsetX || 0) * this.zoom;
-    const cy = py + ph / 2 + (page.imageOffsetY || 0) * this.zoom;
-
-    // Store unclipped rect for handle interaction
     this.imgRect = {
-      x: cx - dispW / 2,
-      y: cy - dispH / 2,
-      w: dispW,
-      h: dispH,
-      cx: cx,
-      cy: cy
+      x: cx - geom.dispW / 2,
+      y: cy - geom.dispH / 2,
+      w: geom.dispW,
+      h: geom.dispH,
+      cx,
+      cy
     };
 
     ctx.save();
     ctx.translate(cx, cy);
-    if (rot !== 0) {
-      ctx.rotate((rot * Math.PI) / 180);
+    if (geom.rad !== 0) {
+      ctx.rotate(geom.rad);
     }
-
-    // If cropped
-    if (page.imageCrop) {
-      const [cl, ct, cr, cb] = page.imageCrop;
-      const sx = cl * natW;
-      const sy = ct * natH;
-      const sw = (cr - cl) * natW;
-      const sh = (cb - ct) * natH;
-      ctx.drawImage(img, sx, sy, sw, sh, -dispW / 2, -dispH / 2, dispW, dispH);
-    } else {
-      const drawW = isSwapped ? dispH : dispW;
-      const drawH = isSwapped ? dispW : dispH;
-      ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-    }
-
+    ctx.drawImage(
+      img,
+      geom.sx, geom.sy, geom.sw, geom.sh,
+      -geom.drawW / 2, -geom.drawH / 2, geom.drawW, geom.drawH
+    );
     ctx.restore();
   }
 
@@ -262,7 +264,6 @@ export class CanvasPreview {
     const { x, y, w, h } = this.imgRect;
     if (!w || !h) return;
 
-    // 4 corner coordinates
     this.handles = {
       nw: { x: x, y: y },
       ne: { x: x + w, y: y },
@@ -270,17 +271,15 @@ export class CanvasPreview {
       se: { x: x + w, y: y + h }
     };
 
-    // Bounding outline around the image
     ctx.save();
-    ctx.strokeStyle = '#22c55e'; // Vibrant green
+    ctx.strokeStyle = '#22c55e';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(x, y, w, h);
     ctx.setLineDash([]);
 
-    // Draw 4 green square handles
     const s = this.HANDLE_SIZE;
-    for (const [corner, pt] of Object.entries(this.handles)) {
+    for (const pt of Object.values(this.handles)) {
       ctx.fillStyle = '#22c55e';
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
@@ -299,20 +298,17 @@ export class CanvasPreview {
     const cropW = (crop[2] - crop[0]) * pw;
     const cropH = (crop[3] - crop[1]) * ph;
 
-    // Semi-transparent dark mask
     ctx.save();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-    ctx.fillRect(px, py, pw, cropY - py); // Top
-    ctx.fillRect(px, cropY + cropH, pw, py + ph - (cropY + cropH)); // Bottom
-    ctx.fillRect(px, cropY, cropX - px, cropH); // Left
-    ctx.fillRect(cropX + cropW, cropY, px + pw - (cropX + cropW), cropH); // Right
+    ctx.fillRect(px, py, pw, cropY - py);
+    ctx.fillRect(px, cropY + cropH, pw, py + ph - (cropY + cropH));
+    ctx.fillRect(px, cropY, cropX - px, cropH);
+    ctx.fillRect(cropX + cropW, cropY, px + pw - (cropX + cropW), cropH);
 
-    // Crop border
-    ctx.strokeStyle = '#38bdf8'; // Sky blue
+    ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 2;
     ctx.strokeRect(cropX, cropY, cropW, cropH);
 
-    // Corner guides
     ctx.fillStyle = '#38bdf8';
     const s = 6;
     ctx.fillRect(cropX - s, cropY - s, s * 2, s * 2);
@@ -329,13 +325,9 @@ export class CanvasPreview {
 
     const totalPages = state.pages.length;
     const pageNum = pageIndex + 1;
+    const text = formatPageNumberText(pageNum, totalPages, s.pageNumberStyle);
 
-    let text = `${pageNum}`;
-    if (s.pageNumberStyle === 'dashes') text = `— ${pageNum} —`;
-    else if (s.pageNumberStyle === 'page_x') text = `Page ${pageNum}`;
-    else if (s.pageNumberStyle === 'page_x_of_y') text = `Page ${pageNum} of ${totalPages}`;
-
-    const fontSizePx = s.pageNumberFontSize * this.zoom * (96 / 72);
+    const fontSizePx = (s.pageNumberFontSize || 10) * this.zoom * (96 / 72);
     ctx.font = `${fontSizePx}px ${s.pageNumberFont || 'sans-serif'}`;
     ctx.fillStyle = s.pageNumberColor || '#1e293b';
 
@@ -394,7 +386,6 @@ export class CanvasPreview {
 
     const pt = this.getCanvasPoint(e);
 
-    // 1. Check handles
     const handleHit = this.hitTestHandle(pt);
     if (handleHit) {
       this.isDragging = true;
@@ -406,14 +397,12 @@ export class CanvasPreview {
       return;
     }
 
-    // 2. Check image body pan
     if (this.isPointInImage(pt)) {
       this.isDragging = true;
       this.dragMode = 'pan';
       this.dragStartMouse = pt;
       this.dragStartOffset = { x: page.imageOffsetX || 0, y: page.imageOffsetY || 0 };
       if (e.preventDefault) e.preventDefault();
-      return;
     }
   }
 
@@ -424,7 +413,6 @@ export class CanvasPreview {
     const pt = this.getCanvasPoint(e);
 
     if (!this.isDragging) {
-      // Update cursor
       const handleHit = this.hitTestHandle(pt);
       if (handleHit === 'handle-nw' || handleHit === 'handle-se') {
         this.canvas.style.cursor = 'nwse-resize';
@@ -438,7 +426,6 @@ export class CanvasPreview {
       return;
     }
 
-    // Dragging active
     const dx = pt.x - this.dragStartMouse.x;
     const dy = pt.y - this.dragStartMouse.y;
 
@@ -446,29 +433,24 @@ export class CanvasPreview {
       this.canvas.style.cursor = 'grabbing';
       const offsetPtX = this.dragStartOffset.x + dx / this.zoom;
       const offsetPtY = this.dragStartOffset.y + dy / this.zoom;
-      page.imageOffsetX = Math.round(offsetPtX * 10) / 10;
-      page.imageOffsetY = Math.round(offsetPtY * 10) / 10;
       state.updateCurrentPage({
-        imageOffsetX: page.imageOffsetX,
-        imageOffsetY: page.imageOffsetY
+        imageOffsetX: Math.round(offsetPtX * 10) / 10,
+        imageOffsetY: Math.round(offsetPtY * 10) / 10
       });
       return;
     }
 
     if (this.dragMode && this.dragMode.startsWith('handle-')) {
-      const corner = this.dragMode.split('-')[1]; // nw, ne, sw, se
       const cx = this.imgRect.cx;
       const cy = this.imgRect.cy;
 
-      // Distance from center to mouse vs distance from center to start
       const startDist = Math.hypot(this.dragStartMouse.x - cx, this.dragStartMouse.y - cy);
       const currentDist = Math.hypot(pt.x - cx, pt.y - cy);
 
       if (startDist > 5) {
         const factor = currentDist / startDist;
         const newScale = Math.max(0.1, Math.min(4.0, this.dragStartScale * factor));
-        page.imageScale = Math.round(newScale * 100) / 100;
-        state.updateCurrentPage({ imageScale: page.imageScale });
+        state.updateCurrentPage({ imageScale: Math.round(newScale * 100) / 100 });
       }
     }
   }

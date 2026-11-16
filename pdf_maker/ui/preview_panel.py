@@ -289,26 +289,22 @@ class PreviewPanel(ctk.CTkFrame):
             return
 
         try:
-            from PIL import Image, ImageOps
-            from ..converters.pdf_builder import _page_dims
+            from ..converters.pdf_builder import get_source_image_dimensions
 
-            src = Image.open(page.source_file)
-            src = ImageOps.exif_transpose(src)
-            if src.mode != "RGB":
-                src = src.convert("RGB")
-            if page.image_rotation:
-                src = src.rotate(-page.image_rotation, expand=True)
-            img_w, img_h = src.size
-            src.close()
+            is_crop = self.controller.editor_mode == "crop"
+            dims = get_source_image_dimensions(page, apply_crop=not is_crop)
+            if dims is None or dims[0] <= 0 or dims[1] <= 0:
+                raise ValueError("Unavailable image dimensions")
+            img_w, img_h = dims
 
             fit_scale  = min(pw_px / img_w, ph_px / img_h)
-            eff_scale  = 1.0 if self.controller.editor_mode == "crop" else page.image_scale
+            eff_scale  = 1.0 if is_crop else page.image_scale
             final_px_w = int(img_w * fit_scale * eff_scale)
             final_px_h = int(img_h * fit_scale * eff_scale)
 
             # Image centre on canvas
-            eff_ox = 0.0 if self.controller.editor_mode == "crop" else page.image_offset_x
-            eff_oy = 0.0 if self.controller.editor_mode == "crop" else page.image_offset_y
+            eff_ox = 0.0 if is_crop else page.image_offset_x
+            eff_oy = 0.0 if is_crop else page.image_offset_y
             ox_px = int(eff_ox * zoom)
             oy_px = int(eff_oy * zoom)
             self._img_cx = page_cx + ox_px
@@ -526,7 +522,11 @@ class PreviewPanel(ctk.CTkFrame):
         self._canvas.delete("all")
         self._photo = None
         self._handle_positions.clear()
-        self._show_placeholder("Add files to preview the document")
+        self._show_placeholder(
+            "📐 Interactive Page Preview\n\n"
+            "Click '➕ Add Files' (or press A) to import images, PDFs, Word docs, or text.\n"
+            "Press Ctrl+K for Command Palette or ? for Keyboard Shortcuts."
+        )
         self._page_info_label.configure(text="No page selected")
         self._nav_label.configure(text="— / —")
 
@@ -535,7 +535,7 @@ class PreviewPanel(ctk.CTkFrame):
         ch = max(self._canvas.winfo_height(), 200)
         self._canvas.create_text(
             cw // 2, ch // 2, text=text,
-            fill="#4a5568", font=("Helvetica", 13), tags="placeholder"
+            fill="#94a3b8", font=("Helvetica", 12), justify="center", tags="placeholder"
         )
 
     # ------------------------------------------------------------------ #

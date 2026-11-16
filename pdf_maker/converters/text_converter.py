@@ -17,6 +17,8 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.colors import HexColor
 
+from .pdf_handler import split_pdf_to_pages as _split_pdf_to_pages
+
 PAGE_SIZES = {
     "A4":     A4,
     "Letter": letter,
@@ -138,26 +140,3 @@ def _write_error_pdf(path: str, error_msg: str, page_dims) -> None:
         doc.close()
     except Exception:
         pass
-
-
-def _split_pdf_to_pages(pdf_path: str, cleanup_source: bool = False) -> list[str]:
-    """Split a multi-page PDF into individual single-page temp PDFs."""
-    import fitz
-    src = fitz.open(pdf_path)
-    temp_paths: list[str] = []
-    for i in range(len(src)):
-        new_doc = fitz.open()
-        new_doc.insert_pdf(src, from_page=i, to_page=i)
-        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-        tmp_path = tmp.name
-        tmp.close()
-        new_doc.save(tmp_path)
-        new_doc.close()
-        temp_paths.append(tmp_path)
-    src.close()
-    if cleanup_source:
-        try:
-            os.unlink(pdf_path)
-        except Exception:
-            pass
-    return temp_paths

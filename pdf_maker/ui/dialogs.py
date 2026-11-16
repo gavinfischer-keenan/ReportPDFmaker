@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Optional, Callable
 import customtkinter as ctk
 
-from ..settings_manager import SettingsManager, FONT_OPTIONS, PAGE_NUMBER_STYLES
+from ..settings_manager import (
+    DEFAULT_SETTINGS,
+    FONT_OPTIONS,
+    PAGE_NUMBER_STYLES,
+    SettingsManager,
+    compute_settings_diff,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -72,141 +78,161 @@ class WarningsDialog(ctk.CTkToplevel):
 # ---------------------------------------------------------------------------
 
 class PageNumberSettingsDialog(ctk.CTkToplevel):
-    """Full customization dialog for page number formatting."""
+    """Grouped settings dialog with descriptions, sensible defaults, and change diff confirmation."""
 
     def __init__(self, parent, settings: SettingsManager, on_apply: Optional[Callable] = None):
         super().__init__(parent)
         self.settings = settings
         self.on_apply = on_apply
-        self.title("Page Number Settings")
-        self.geometry("480x560")
+        self.title("Document & Page Number Settings")
+        self.geometry("520x620")
         self.resizable(False, False)
         self.grab_set()
 
         # Title
         ctk.CTkLabel(
-            self, text="📑 Page Number Settings",
+            self, text="⚙️  Document & Page Number Settings",
             font=ctk.CTkFont(size=15, weight="bold")
-        ).pack(pady=(18, 2), padx=20, anchor="w")
+        ).pack(pady=(16, 2), padx=20, anchor="w")
         ctk.CTkLabel(
-            self, text="Customise how page numbers appear in the output PDF.",
-            font=ctk.CTkFont(size=11), text_color="gray"
-        ).pack(padx=20, anchor="w", pady=(0, 12))
+            self, text="Grouped preferences with sensible defaults. Raw margin offsets are managed automatically.",
+            font=ctk.CTkFont(size=11), text_color="gray", wraplength=470, justify="left"
+        ).pack(padx=20, anchor="w", pady=(0, 8))
 
-        form = ctk.CTkFrame(self, fg_color="transparent")
-        form.pack(fill="both", expand=True, padx=20, pady=4)
-        form.columnconfigure(1, weight=1)
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=16, pady=4)
 
-        row = 0
+        # Group 1: Document Layout
+        self._add_group_header(scroll, "1. Document Layout", "Page dimensions used when rendering images and text.")
+        g1 = ctk.CTkFrame(scroll, corner_radius=8)
+        g1.pack(fill="x", pady=(2, 10))
+        g1.columnconfigure(1, weight=1)
 
-        # Enabled toggle
-        self._enabled_var = ctk.BooleanVar(value=settings.get("page_numbers"))
-        self._add_row(form, row, "Enable page numbers:", ctk.CTkSwitch(
-            form, variable=self._enabled_var, text=""
-        ))
-        row += 1
+        self._page_size_var = ctk.StringVar(value=settings.get("page_size", "A4"))
+        self._add_row(g1, 0, "Page Size:", "Standard dimensions for newly created pages.",
+                      ctk.CTkSegmentedButton(g1, values=["A4", "Letter"], variable=self._page_size_var))
 
-        # Position
-        self._position_var = ctk.StringVar(value=settings.get("page_number_position"))
-        self._add_row(form, row, "Position:", ctk.CTkSegmentedButton(
-            form, values=["top", "bottom"], variable=self._position_var
-        ))
-        row += 1
+        # Group 2: Page Numbering & Position
+        self._add_group_header(scroll, "2. Page Numbering & Position", "Toggle numbers and choose where they appear on each page.")
+        g2 = ctk.CTkFrame(scroll, corner_radius=8)
+        g2.pack(fill="x", pady=(2, 10))
+        g2.columnconfigure(1, weight=1)
 
-        # Alignment
-        self._align_var = ctk.StringVar(value=settings.get("page_number_alignment"))
-        self._add_row(form, row, "Alignment:", ctk.CTkSegmentedButton(
-            form, values=["left", "center", "right"], variable=self._align_var
-        ))
-        row += 1
+        self._enabled_var = ctk.BooleanVar(value=settings.get("page_numbers", False))
+        self._add_row(g2, 0, "Enable page numbers:", "Stamp page numbers across exported pages.",
+                      ctk.CTkSwitch(g2, variable=self._enabled_var, text=""))
 
-        # Style
+        self._skip_cover_var = ctk.BooleanVar(value=settings.get("skip_cover_page", False))
+        self._add_row(g2, 1, "Skip cover page:", "Omit numbering on page 1 while keeping sequence.",
+                      ctk.CTkSwitch(g2, variable=self._skip_cover_var, text=""))
+
+        self._position_var = ctk.StringVar(value=settings.get("page_number_position", "bottom"))
+        self._add_row(g2, 2, "Position:", "Header (top) or footer (bottom) placement.",
+                      ctk.CTkSegmentedButton(g2, values=["top", "bottom"], variable=self._position_var))
+
+        self._align_var = ctk.StringVar(value=settings.get("page_number_alignment", "center"))
+        self._add_row(g2, 3, "Alignment:", "Horizontal placement within header or footer.",
+                      ctk.CTkSegmentedButton(g2, values=["left", "center", "right"], variable=self._align_var))
+
+        # Group 3: Format & Typography
+        self._add_group_header(scroll, "3. Format & Typography", "Visual style, font family, size, and color.")
+        g3 = ctk.CTkFrame(scroll, corner_radius=8)
+        g3.pack(fill="x", pady=(2, 10))
+        g3.columnconfigure(1, weight=1)
+
         style_opts = list(PAGE_NUMBER_STYLES.keys())
-        style_labels = [f"{k}  →  {v}" for k, v in PAGE_NUMBER_STYLES.items()]
-        self._style_var = ctk.StringVar(value=settings.get("page_number_style"))
-        self._add_row(form, row, "Number style:", ctk.CTkOptionMenu(
-            form, values=style_opts, variable=self._style_var
-        ))
-        row += 1
+        self._style_var = ctk.StringVar(value=settings.get("page_number_style", "plain"))
+        self._add_row(g3, 0, "Number style:", "Display format such as '1' or 'Page 1 of N'.",
+                      ctk.CTkOptionMenu(g3, values=style_opts, variable=self._style_var))
 
-        # Font
-        self._font_var = ctk.StringVar(value=settings.get("page_number_font"))
-        self._add_row(form, row, "Font:", ctk.CTkOptionMenu(
-            form, values=FONT_OPTIONS, variable=self._font_var
-        ))
-        row += 1
+        self._font_var = ctk.StringVar(value=settings.get("page_number_font", "Helvetica"))
+        self._add_row(g3, 1, "Font:", "PDF standard font used for numbering.",
+                      ctk.CTkOptionMenu(g3, values=FONT_OPTIONS, variable=self._font_var))
 
-        # Font size
-        self._font_size_var = ctk.IntVar(value=settings.get("page_number_font_size"))
-        fs_frame = ctk.CTkFrame(form, fg_color="transparent")
-        self._fs_slider = ctk.CTkSlider(fs_frame, from_=6, to=24, variable=self._font_size_var, width=160,
-                                         command=lambda v: self._fs_label.configure(text=f"{int(v)} pt"))
-        self._fs_label  = ctk.CTkLabel(fs_frame, text=f"{self._font_size_var.get()} pt", width=50)
+        self._font_size_var = ctk.IntVar(value=settings.get("page_number_font_size", 10))
+        fs_frame = ctk.CTkFrame(g3, fg_color="transparent")
+        self._fs_slider = ctk.CTkSlider(fs_frame, from_=6, to=24, variable=self._font_size_var, width=150,
+                                        command=lambda v: self._fs_label.configure(text=f"{int(v)} pt"))
+        self._fs_label  = ctk.CTkLabel(fs_frame, text=f"{self._font_size_var.get()} pt", width=48)
         self._fs_slider.pack(side="left")
         self._fs_label.pack(side="left", padx=6)
-        self._add_row(form, row, "Font size:", fs_frame)
-        row += 1
+        self._add_row(g3, 2, "Font size:", "Text size in points (6–24 pt).", fs_frame)
 
-        # Offset from edge
-        self._edge_var = ctk.IntVar(value=settings.get("page_number_offset_from_edge"))
-        edge_frame = ctk.CTkFrame(form, fg_color="transparent")
-        self._edge_slider = ctk.CTkSlider(edge_frame, from_=5, to=80, variable=self._edge_var, width=160,
-                                           command=lambda v: self._edge_label.configure(text=f"{int(v)} pt"))
-        self._edge_label  = ctk.CTkLabel(edge_frame, text=f"{self._edge_var.get()} pt", width=50)
-        self._edge_slider.pack(side="left")
-        self._edge_label.pack(side="left", padx=6)
-        self._add_row(form, row, "Offset from edge:", edge_frame)
-        row += 1
-
-        # Offset from side (for left/right alignment)
-        self._side_var = ctk.IntVar(value=settings.get("page_number_offset_from_side"))
-        side_frame = ctk.CTkFrame(form, fg_color="transparent")
-        self._side_slider = ctk.CTkSlider(side_frame, from_=5, to=150, variable=self._side_var, width=160,
-                                           command=lambda v: self._side_label.configure(text=f"{int(v)} pt"))
-        self._side_label  = ctk.CTkLabel(side_frame, text=f"{self._side_var.get()} pt", width=50)
-        self._side_slider.pack(side="left")
-        self._side_label.pack(side="left", padx=6)
-        self._add_row(form, row, "Offset from side:", side_frame)
-        row += 1
-
-        # Color
-        self._color_var = ctk.StringVar(value=settings.get("page_number_color"))
-        color_frame = ctk.CTkFrame(form, fg_color="transparent")
+        self._color_var = ctk.StringVar(value=settings.get("page_number_color", "#000000"))
+        color_frame = ctk.CTkFrame(g3, fg_color="transparent")
         self._color_entry = ctk.CTkEntry(color_frame, textvariable=self._color_var, width=100)
         self._color_entry.pack(side="left")
-        ctk.CTkLabel(color_frame, text="  (hex, e.g. #000000)", text_color="gray",
-                     font=ctk.CTkFont(size=11)).pack(side="left")
-        self._add_row(form, row, "Color:", color_frame)
-        row += 1
+        ctk.CTkLabel(color_frame, text="  (hex e.g. #000000)", text_color="gray",
+                     font=ctk.CTkFont(size=10)).pack(side="left")
+        self._add_row(g3, 3, "Color:", "Hex text color for page numbers.", color_frame)
+
+        # Confirmation banner area
+        self._diff_label = ctk.CTkLabel(
+            self, text="", font=ctk.CTkFont(size=11), text_color="#2ecc71",
+            wraplength=470, justify="left"
+        )
+        self._diff_label.pack(padx=20, pady=(4, 0), anchor="w")
 
         # Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(pady=16)
-        ctk.CTkButton(btn_frame, text="Apply", width=110, command=self._apply).pack(side="left", padx=8)
+        btn_frame.pack(pady=12)
+        ctk.CTkButton(btn_frame, text="Save & Apply", width=120, command=self._apply).pack(side="left", padx=6)
+        ctk.CTkButton(btn_frame, text="Reset Defaults", width=120,
+                      fg_color="transparent", border_width=1, command=self._reset_defaults).pack(side="left", padx=6)
         ctk.CTkButton(btn_frame, text="Cancel", width=90,
-                      fg_color="transparent", border_width=1, command=self.destroy).pack(side="left", padx=4)
+                      fg_color="transparent", border_width=1, command=self.destroy).pack(side="left", padx=6)
 
+        self.bind("<Escape>", lambda _: self.destroy())
         _center_on_parent(self, parent)
 
-    def _add_row(self, parent, row: int, label: str, widget) -> None:
-        ctk.CTkLabel(parent, text=label, anchor="e", width=170,
-                     font=ctk.CTkFont(size=12)).grid(row=row, column=0, padx=(0, 12), pady=7, sticky="e")
-        widget.grid(row=row, column=1, pady=7, sticky="w")
+    def _add_group_header(self, parent, title: str, subtitle: str) -> None:
+        ctk.CTkLabel(parent, text=title, font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(
+            fill="x", padx=4, pady=(6, 0)
+        )
+        ctk.CTkLabel(parent, text=subtitle, font=ctk.CTkFont(size=10), text_color="gray", anchor="w").pack(
+            fill="x", padx=4, pady=(0, 4)
+        )
+
+    def _add_row(self, parent, row: int, label: str, desc: str, widget) -> None:
+        lbl_wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        lbl_wrap.grid(row=row, column=0, padx=(10, 12), pady=6, sticky="w")
+        ctk.CTkLabel(lbl_wrap, text=label, anchor="w", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(lbl_wrap, text=desc, anchor="w", font=ctk.CTkFont(size=10), text_color="gray", wraplength=200, justify="left").pack(anchor="w")
+        widget.grid(row=row, column=1, padx=(0, 10), pady=6, sticky="e")
+
+    def _reset_defaults(self) -> None:
+        self._page_size_var.set(DEFAULT_SETTINGS["page_size"])
+        self._enabled_var.set(DEFAULT_SETTINGS["page_numbers"])
+        self._skip_cover_var.set(DEFAULT_SETTINGS["skip_cover_page"])
+        self._position_var.set(DEFAULT_SETTINGS["page_number_position"])
+        self._align_var.set(DEFAULT_SETTINGS["page_number_alignment"])
+        self._style_var.set(DEFAULT_SETTINGS["page_number_style"])
+        self._font_var.set(DEFAULT_SETTINGS["page_number_font"])
+        self._font_size_var.set(DEFAULT_SETTINGS["page_number_font_size"])
+        self._fs_label.configure(text=f"{DEFAULT_SETTINGS['page_number_font_size']} pt")
+        self._color_var.set(DEFAULT_SETTINGS["page_number_color"])
+        self._diff_label.configure(text="Restored sensible defaults (click Save & Apply to persist).", text_color="#f39c12")
 
     def _apply(self) -> None:
-        self.settings.set_many({
-            "page_numbers":                   self._enabled_var.get(),
-            "page_number_position":           self._position_var.get(),
-            "page_number_alignment":          self._align_var.get(),
-            "page_number_style":              self._style_var.get(),
-            "page_number_font":               self._font_var.get(),
-            "page_number_font_size":          int(self._font_size_var.get()),
-            "page_number_offset_from_edge":   int(self._edge_var.get()),
-            "page_number_offset_from_side":   int(self._side_var.get()),
-            "page_number_color":              self._color_var.get(),
-        })
+        updates = {
+            "page_size":             self._page_size_var.get(),
+            "page_numbers":          self._enabled_var.get(),
+            "skip_cover_page":       self._skip_cover_var.get(),
+            "page_number_position":  self._position_var.get(),
+            "page_number_alignment": self._align_var.get(),
+            "page_number_style":     self._style_var.get(),
+            "page_number_font":      self._font_var.get(),
+            "page_number_font_size": int(self._font_size_var.get()),
+            "page_number_color":     self._color_var.get().strip() or "#000000",
+        }
+        old_vals = {k: self.settings.get(k) for k in updates}
+        changes = compute_settings_diff(old_vals, updates)
+        self.settings.set_many(updates)
         if self.on_apply:
-            self.on_apply()
+            try:
+                self.on_apply(changes)
+            except TypeError:
+                self.on_apply()
         self.destroy()
 
 
@@ -315,3 +341,132 @@ class ProgressDialog(ctk.CTkToplevel):
 
     def close(self) -> None:
         self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Keyboard Shortcuts Overlay ("?")
+# ---------------------------------------------------------------------------
+
+DESKTOP_SHORTCUTS = [
+    ("Ctrl + K", "Open Command Palette"),
+    ("?", "Show Keyboard Shortcuts"),
+    ("A", "Add Files to Document"),
+    ("E", "Save / Export PDF"),
+    ("S", "Open Shrink PDF Tool"),
+    ("R", "Rotate Selected Page +90°"),
+    ("O", "Toggle Portrait / Landscape"),
+    ("N", "Toggle Page Numbers"),
+    ("F", "Fit Preview Zoom"),
+    ("Delete", "Remove Selected Page"),
+    ("← / →", "Previous / Next Page"),
+    ("T", "Toggle Dark / Light Theme"),
+]
+
+
+class ShortcutsDialog(ctk.CTkToplevel):
+    """Keyboard shortcuts reference overlay."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Keyboard Shortcuts")
+        self.geometry("440x480")
+        self.resizable(False, False)
+        self.grab_set()
+
+        ctk.CTkLabel(
+            self, text="⌨️  Keyboard Shortcuts",
+            font=ctk.CTkFont(size=15, weight="bold")
+        ).pack(pady=(16, 4), padx=20, anchor="w")
+        ctk.CTkLabel(
+            self, text="Single-key shortcuts pause automatically while typing in text inputs.",
+            font=ctk.CTkFont(size=11), text_color="gray"
+        ).pack(padx=20, anchor="w", pady=(0, 8))
+
+        frame = ctk.CTkScrollableFrame(self)
+        frame.pack(fill="both", expand=True, padx=16, pady=4)
+        for key, desc in DESKTOP_SHORTCUTS:
+            row = ctk.CTkFrame(frame, fg_color="transparent")
+            row.pack(fill="x", pady=3, padx=6)
+            ctk.CTkLabel(row, text=desc, font=ctk.CTkFont(size=12), anchor="w").pack(side="left")
+            ctk.CTkLabel(
+                row, text=f"  {key}  ", font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color=("gray82", "gray28"), corner_radius=5
+            ).pack(side="right")
+
+        ctk.CTkButton(self, text="Close", width=100, command=self.destroy).pack(pady=12)
+        self.bind("<Escape>", lambda _: self.destroy())
+        _center_on_parent(self, parent)
+
+
+# ---------------------------------------------------------------------------
+# Command Palette Dialog (Ctrl+K)
+# ---------------------------------------------------------------------------
+
+class CommandPaletteDialog(ctk.CTkToplevel):
+    """Quick command palette searching pages, actions, and recent items."""
+
+    def __init__(self, parent, items: list[tuple[str, str, Callable]]):
+        super().__init__(parent)
+        self._items = items
+        self._filtered: list[tuple[str, str, Callable]] = list(items)
+        self.title("Command Palette")
+        self.geometry("500x400")
+        self.resizable(False, False)
+        self.grab_set()
+
+        self._query_var = ctk.StringVar()
+        self._entry = ctk.CTkEntry(
+            self,
+            textvariable=self._query_var,
+            placeholder_text="Search pages, actions, settings…",
+            height=38,
+            font=ctk.CTkFont(size=13),
+        )
+        self._entry.pack(fill="x", padx=16, pady=(16, 8))
+        self._entry.bind("<KeyRelease>", lambda _: self._render_results())
+        self._entry.bind("<Return>", lambda _: self._run_first())
+
+        self._results = ctk.CTkScrollableFrame(self)
+        self._results.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+
+        self.bind("<Escape>", lambda _: self.destroy())
+        self._render_results()
+        _center_on_parent(self, parent)
+        self.after(30, self._entry.focus_set)
+
+    def _render_results(self) -> None:
+        for w in self._results.winfo_children():
+            w.destroy()
+        q = self._query_var.get().strip().lower()
+        self._filtered = [
+            it for it in self._items
+            if not q or q in it[0].lower() or q in it[1].lower()
+        ]
+        if not self._filtered:
+            ctk.CTkLabel(
+                self._results,
+                text="No matching pages or actions found.",
+                text_color="gray",
+                font=ctk.CTkFont(size=12),
+            ).pack(pady=30)
+            return
+        for title, cat, cb in self._filtered[:25]:
+            btn = ctk.CTkButton(
+                self._results,
+                text=f"[{cat}]  {title}",
+                anchor="w",
+                height=34,
+                fg_color=("gray88", "gray24"),
+                hover_color=("gray78", "gray32"),
+                text_color=("black", "white"),
+                command=lambda fn=cb: self._trigger(fn),
+            )
+            btn.pack(fill="x", pady=2)
+
+    def _run_first(self) -> None:
+        if self._filtered:
+            self._trigger(self._filtered[0][2])
+
+    def _trigger(self, cb: Callable) -> None:
+        self.destroy()
+        cb()
