@@ -7,6 +7,7 @@ Handles loading and saving all application settings to
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -176,9 +177,18 @@ class SettingsManager:
     @property
     def output_folder(self) -> str:
         folder = self.get("output_folder")
-        # Validate the folder still exists; fall back to Documents
-        if not os.path.isdir(folder):
-            folder = str(Path.home() / "Documents")
+        # Validate the folder still exists; fall back to Documents, then home or temp
+        if not folder or not os.path.isdir(folder):
+            for candidate in (
+                Path.home() / "Documents",
+                Path.home(),
+                Path(tempfile.gettempdir()),
+            ):
+                if candidate.is_dir():
+                    folder = str(candidate)
+                    break
+            else:
+                folder = str(Path.home())
             self.set("output_folder", folder)
         return folder
 
