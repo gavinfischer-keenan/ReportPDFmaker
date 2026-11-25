@@ -103,7 +103,7 @@ export async function convertDocxFile(file) {
   const result = await window.mammoth.extractRawText({ arrayBuffer: arrayBuffer });
   const text = result.value || 'Empty document';
   
-  return convertPlainText(text, file.name);
+  return convertPlainText(text, file.name, 'docx');
 }
 
 /**
@@ -111,13 +111,13 @@ export async function convertDocxFile(file) {
  */
 export async function convertTextFile(file) {
   const text = await readFileAsText(file);
-  return convertPlainText(text, file.name);
+  return convertPlainText(text, file.name, 'text');
 }
 
 /**
  * Paginate plain text and render onto styled document canvas pages
  */
-export async function convertPlainText(text, filename = 'Document.txt') {
+export async function convertPlainText(text, filename = 'Document.txt', sourceType = 'text') {
   const measuringCanvas = document.createElement('canvas');
   const measuringContext = measuringCanvas.getContext('2d');
   measuringContext.font = '22px "Courier New", monospace';
@@ -175,10 +175,11 @@ export async function convertPlainText(text, filename = 'Document.txt') {
 
     pages.push(new PageItem({
       name: `${filename} (p. ${pageNum})`,
-      sourceType: 'text',
+      sourceType,
       sourceImage: img,
       thumbnailUrl: thumbUrl,
       textContent: chunkLines.join('\n'),
+      textHeader: `${filename} — Page ${pageNum}`,
       pageLandscape: false
     }));
   }

@@ -6,6 +6,7 @@
 
 import { PageItem } from './state.js';
 import { loadImage } from './converters.js';
+import { showToast, ModalFocusTrap } from './ui-feedback.js';
 
 export class ThreeViewerModal {
   constructor(modalId, canvasContainerId) {
@@ -20,6 +21,7 @@ export class ThreeViewerModal {
     this.currentFileName = '3d-model';
 
     this.onCaptureCallback = null;
+    this.focusTrap = new ModalFocusTrap();
     // Initialize WebGL only when a 3D file is opened.
   }
 
@@ -84,6 +86,7 @@ export class ThreeViewerModal {
     this.onCaptureCallback = onCapture;
     this.currentFileName = file.name;
     this.modal.classList.remove('hidden');
+    this.focusTrap.activate(this.modal);
     if (!this.animId && this.renderer) {
       this.animate();
     }
@@ -129,7 +132,7 @@ export class ThreeViewerModal {
       }
     }, (err) => {
       console.error('Failed to parse 3D file:', err);
-      alert('Could not parse 3D file. Please ensure it is a valid .gltf or .glb format.');
+      showToast('Could not parse 3D file. Please ensure it is a valid .gltf or .glb format.', 'error');
       this.close();
     });
   }
@@ -167,6 +170,7 @@ export class ThreeViewerModal {
 
   close() {
     this.modal.classList.add('hidden');
+    this.focusTrap.deactivate(true);
     if (this.animId) {
       cancelAnimationFrame(this.animId);
       this.animId = null;

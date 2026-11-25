@@ -5,16 +5,16 @@ The root CTk window that assembles all panels into the 3-column layout.
 Also owns the toolbar, status bar, and bottom save/settings bar.
 
 Layout:
-  ┌─────────────────────────────────────────────────────┐
-  │  TOOLBAR: Add | Remove | ↑ | ↓ | ──────── | Reset   │
-  ├──────────────┬──────────────────────┬───────────────┤
-  │ File List    │    Preview           │  Page Editor  │
-  │ (240px)      │    (flex)            │  (220px)      │
-  ├──────────────┴──────────────────────┴───────────────┤
-  │  STATUS BAR                                          │
-  ├──────────────────────────────────────────────────────┤
-  │ [Page Nums: ◉/○] [⚙Settings]  Path: [...]  [💾 Save]│
-  └──────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  TOOLBAR: Add | Remove | ▲ | ▼ | ─── | Reset | ☀/🌙 | ⌘K | ? | ℹ | Shrink │
+  ├──────────────┬──────────────────────┬───────────────────────────────────┤
+  │ File List    │    Preview           │  Page Editor                      │
+  │ (240px)      │    (flex)            │  (240px)                          │
+  ├──────────────┴──────────────────────┴───────────────────────────────────┤
+  │  STATUS BAR (status text, import progress, Word availability)           │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │ [Page Nums] [⚙] | [⚡ Optimize] | Output: [...] [🏠 Docs] [📁] [💾 Save] │
+  └─────────────────────────────────────────────────────────────────────────┘
 """
 
 import os
@@ -29,6 +29,7 @@ import customtkinter as ctk
 from ..controller import AppController, EVT_STATUS, EVT_WARNINGS, EVT_RESET
 from ..settings_manager import SettingsManager
 from ..utils.file_utils import get_dialog_filetypes
+from ..utils.win_dnd import enable_win_file_drop
 from .file_list_panel import FileListPanel
 from .preview_panel import PreviewPanel
 from .page_editor_panel import PageEditorPanel
@@ -115,6 +116,8 @@ class MainWindow(ctk.CTk):
             win32gui.SetForegroundWindow(top_hwnd)
         except Exception:
             pass
+
+        enable_win_file_drop(self, self._import_file_paths)
 
     # ------------------------------------------------------------------ #
     # UI Construction
@@ -396,6 +399,7 @@ class MainWindow(ctk.CTk):
 
     def _on_reset(self) -> None:
         self._pn_var.set(False)
+        self._optimize_var.set(self.settings.get("optimize_file_size", False))
         self._path_label.configure(
             text=self._short_path(self.settings.output_folder)
         )
@@ -410,9 +414,12 @@ class MainWindow(ctk.CTk):
             filetypes=get_dialog_filetypes(),
             parent=self,
         )
+        if files:
+            self._import_file_paths(list(files))
+
+    def _import_file_paths(self, files: list[str]) -> None:
         if not files:
             return
-
         total = len(files)
         self._set_status(f"Importing {total} file{'s' if total > 1 else ''}…")
         self._show_import_progress(0, total, "")
@@ -494,7 +501,7 @@ class MainWindow(ctk.CTk):
                 self._set_status(f"✅ Saved {len(changes)} setting change(s): {', '.join(changes[:3])}")
             else:
                 self._set_status("Settings saved (no changes).")
-        PageNumberSettingsDialog(self, self.settings, on_apply=_on_apply)
+        PageNumberSettingsDialog(self, self.settings, on_apply=_on_apply, controller=self.controller)
 
     def _is_typing_in_input(self) -> bool:
         focused = self.focus_get()
@@ -503,6 +510,17 @@ class MainWindow(ctk.CTk):
     def _bind_shortcuts(self) -> None:
         self.bind("<Control-k>", lambda _e: self._open_command_palette())
         self.bind("<Control-K>", lambda _e: self._open_command_palette())
+        self.bind("<Control-o>", lambda _e: self._open_project())
+        self.bind("<Control-O>", lambda _e: self._open_project())
+        self.bind("<Control-Shift-S>", lambda _e: self._save_project())
+        self.bind("<Control-Shift-s>", lambda _e: self._save_project())
+        self.bind("<Control-z>", lambda _e: None if self._is_typing_in_input() else self.controller.undo())
+        self.bind("<Control-Z>", lambda _e: None if self._is_typing_in_input() else self.controller.undo())
+        self.bind("<Control-y>", lambda _e: None if self._is_typing_in_input() else self.controller.redo())
+        self.bind("<Control-Y>", lambda _e: None if self._is_typing_in_input() else self.controller.redo())
+        self.bind("<Control-Shift-Z>", lambda _e: None if self._is_typing_in_input() else self.controller.redo())
+        self.bind("<Alt-Up>", lambda _e: None if self._is_typing_in_input() else self.controller.move_page_up(self.controller.current_index))
+        self.bind("<Alt-Down>", lambda _e: None if self._is_typing_in_input() else self.controller.move_page_down(self.controller.current_index))
         self.bind("<KeyPress>", self._on_key_press)
 
     def _on_key_press(self, event) -> None:
@@ -546,7 +564,15 @@ class MainWindow(ctk.CTk):
     def _open_command_palette(self) -> None:
         items = [
             ("Add Files… (A)", "Action", self._add_files),
+            ("Open Project… (Ctrl+O)", "Project", self._open_project),
+            ("Save Project… (Ctrl+Shift+S)", "Project", self._save_project),
             ("Save / Export PDF (E)", "Action", self._save_pdf),
+            ("Undo Last Action (Ctrl+Z)", "Edit", self.controller.undo),
+            ("Redo Last Action (Ctrl+Y)", "Edit", self.controller.redo),
+            ("Duplicate Selected Page", "Edit", lambda: self.controller.duplicate_page(self.controller.current_index)),
+            ("Insert Blank Page", "Edit", lambda: self.controller.insert_blank_page(self.controller.current_index)),
+            ("Reverse Page Order", "Edit", self.controller.reverse_pages),
+            ("Sort Pages by Name (A→Z)", "Edit", self.controller.sort_pages_by_name),
             ("Shrink a PDF (S)", "Tool", self._open_shrink_dialog),
             ("Document & Page Number Settings", "Settings", self._open_pn_settings),
             ("Toggle Page Numbers (N)", "Settings", lambda: (self._pn_var.set(not self._pn_var.get()), self._on_page_numbers_toggle())),
@@ -558,6 +584,43 @@ class MainWindow(ctk.CTk):
         for idx, p in enumerate(self.controller.pages):
             items.append((f"Page {idx + 1}: {p.display_name}", "Page", lambda i=idx: self.controller.select_page(i)))
         CommandPaletteDialog(self, items)
+
+    def _open_project(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Open Paper Nautilus Project",
+            initialdir=self.settings.output_folder,
+            filetypes=[("Nautilus Project", "*.nautilus"), ("All Files", "*.*")],
+            parent=self,
+        )
+        if not path:
+            return
+        ok, warns = self.controller.load_project(path)
+        self._pn_var.set(self.settings.get("page_numbers"))
+        self._optimize_var.set(self.settings.get("optimize_file_size", False))
+        self._path_label.configure(text=self._short_path(self.settings.output_folder))
+        self.after(0, self._preview_panel._schedule_render)
+        if ok:
+            self._set_status(f"✅ Loaded project: {Path(path).name}")
+        elif warns:
+            WarningsDialog(self, warns)
+
+    def _save_project(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save Paper Nautilus Project",
+            initialdir=self.settings.output_folder,
+            initialfile="project.nautilus",
+            defaultextension=".nautilus",
+            filetypes=[("Nautilus Project", "*.nautilus"), ("All Files", "*.*")],
+            parent=self,
+        )
+        if not path:
+            return
+        ok, err = self.controller.save_project(path)
+        if ok:
+            self._set_status(f"✅ Saved project: {Path(path).name}")
+        else:
+            self._set_status(f"❌ Project save failed: {err}")
+            WarningsDialog(self, [err])
 
     def _browse_output_folder(self) -> None:
         folder = filedialog.askdirectory(

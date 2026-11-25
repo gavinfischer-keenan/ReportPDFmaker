@@ -45,6 +45,9 @@ class FileListPanel(ctk.CTkFrame):
         self._row_frames: list[ctk.CTkFrame] = []
         self._empty_frame: Optional[ctk.CTkFrame] = None
         self._selected_index: int = -1
+        self._drag_from_idx: Optional[int] = None
+        self._drag_start_y: int = 0
+        self._dragging_row: bool = False
 
         self._build_ui()
         self._register_events()
@@ -217,9 +220,11 @@ class FileListPanel(ctk.CTkFrame):
         sub_label.pack(anchor="w", padx=2)
 
         for widget in [row, badge, text_frame, name_label, sub_label]:
-            widget.bind("<Button-1>", lambda e, i=idx: self._on_row_click(i))
-            widget.bind("<Enter>",    lambda e, r=row, i=idx: self._on_hover(r, i, True))
-            widget.bind("<Leave>",    lambda e, r=row, i=idx: self._on_hover(r, i, False))
+            widget.bind("<Button-1>",        lambda e, i=idx: self._on_row_press(e, i))
+            widget.bind("<B1-Motion>",       self._on_row_drag)
+            widget.bind("<ButtonRelease-1>", self._on_row_release)
+            widget.bind("<Enter>",           lambda e, r=row, i=idx: self._on_hover(r, i, True))
+            widget.bind("<Leave>",           lambda e, r=row, i=idx: self._on_hover(r, i, False))
 
         return row
 
@@ -247,6 +252,49 @@ class FileListPanel(ctk.CTkFrame):
 
     def _on_row_click(self, idx: int) -> None:
         self.controller.select_page(idx)
+
+    def _on_row_press(self, event: tk.Event, idx: int) -> None:
+        self._drag_from_idx = idx
+        self._drag_start_y = event.y_root
+        self._dragging_row = False
+        self.controller.select_page(idx)
+
+    def _target_index_from_y(self, y_root: int) -> int:
+        if not self._row_frames:
+            return 0
+        for i, frame in enumerate(self._row_frames):
+            try:
+                mid = frame.winfo_rooty() + frame.winfo_height() // 2
+                if y_root < mid:
+                    return i
+            except Exception:
+                continue
+        return len(self._row_frames) - 1
+
+    def _on_row_drag(self, event: tk.Event) -> None:
+        if self._drag_from_idx is None:
+            return
+        if not self._dragging_row and abs(event.y_root - self._drag_start_y) > 8:
+            self._dragging_row = True
+        if self._dragging_row:
+            target = self._target_index_from_y(event.y_root)
+            for i, frame in enumerate(self._row_frames):
+                if i == target and i != self._drag_from_idx:
+                    frame.configure(fg_color=HOVER_BG)
+                elif i != self._selected_index:
+                    frame.configure(fg_color=NORMAL_BG)
+
+    def _on_row_release(self, event: tk.Event) -> None:
+        from_idx = self._drag_from_idx
+        was_dragging = self._dragging_row
+        self._drag_from_idx = None
+        self._dragging_row = False
+        if was_dragging and from_idx is not None:
+            to_idx = self._target_index_from_y(event.y_root)
+            if to_idx != from_idx:
+                self.controller.move_page(from_idx, to_idx)
+            else:
+                self._highlight(self._selected_index)
 
     # ------------------------------------------------------------------ #
     # Controls

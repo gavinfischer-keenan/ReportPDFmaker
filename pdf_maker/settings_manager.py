@@ -45,7 +45,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "confirm_reset": True,       # Ask for confirmation before reset
     "optimize_file_size": False, # Default JPEG quality 95 vs 75
     "word_available": None,      # None = not yet checked; True/False = result of check
+
+    # Overlays, Export Range & PDF Metadata (passwords are never saved)
+    "watermark_text": "",
+    "watermark_opacity": 0.18,
+    "watermark_color": "#64748b",
+    "header_text": "",
+    "footer_text": "",
+    "export_page_range": "",
+    "pdf_title": "",
+    "pdf_author": "",
+    "pdf_subject": "",
 }
+
+PAGE_SIZE_OPTIONS = ["A4", "Letter", "Legal", "A3", "A5", "Fit"]
 
 FONT_OPTIONS = [
     "Helvetica",
@@ -142,6 +155,24 @@ class SettingsManager:
             "skip_cover_page": self.get("skip_cover_page", False),
         }
 
+    def get_overlay_settings(self) -> dict[str, Any]:
+        """Return watermark, header, and footer settings as a dict."""
+        return {
+            "watermark_text": self.get("watermark_text", ""),
+            "watermark_opacity": float(self.get("watermark_opacity", 0.18)),
+            "watermark_color": self.get("watermark_color", "#64748b"),
+            "header_text": self.get("header_text", ""),
+            "footer_text": self.get("footer_text", ""),
+        }
+
+    def get_metadata_settings(self) -> dict[str, str]:
+        """Return PDF document metadata fields."""
+        return {
+            "title": str(self.get("pdf_title", "") or "").strip(),
+            "author": str(self.get("pdf_author", "") or "").strip(),
+            "subject": str(self.get("pdf_subject", "") or "").strip(),
+        }
+
     @property
     def output_folder(self) -> str:
         folder = self.get("output_folder")
@@ -173,6 +204,15 @@ SETTING_LABELS: dict[str, str] = {
     "theme": "Theme",
     "optimize_file_size": "Optimize File Size",
     "confirm_reset": "Confirm Before Reset",
+    "watermark_text": "Watermark Text",
+    "watermark_opacity": "Watermark Opacity",
+    "watermark_color": "Watermark Color",
+    "header_text": "Header Text",
+    "footer_text": "Footer Text",
+    "export_page_range": "Export Page Range",
+    "pdf_title": "PDF Title",
+    "pdf_author": "PDF Author",
+    "pdf_subject": "PDF Subject",
 }
 
 

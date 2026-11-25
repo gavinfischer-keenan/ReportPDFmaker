@@ -12,8 +12,10 @@ Installation (optional):
 """
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 
 def is_3d_available() -> tuple[bool, str]:
@@ -36,6 +38,7 @@ def convert_3d_to_pages(
     page_size: str = "A4",
     image_width: int = 1024,
     image_height: int = 1024,
+    temp_dir: Optional[str] = None,
 ) -> tuple[list[str], list[str]]:
     """
     Render a 3D model file to a PNG image and embed it in a single-page PDF.
@@ -53,7 +56,8 @@ def convert_3d_to_pages(
             f"3D rendering not available.\n\n"
             f"File: {Path(model_path).name}\n\n"
             f"To enable 3D support, install:\n"
-            f"  pip install trimesh pyrender numpy"
+            f"  pip install trimesh pyrender numpy",
+            temp_dir=temp_dir,
         )
         return [err_path], warnings
 
@@ -116,16 +120,18 @@ def convert_3d_to_pages(
         tmp_img.close()
 
         # ---------------------------------------------------------------- #
-        # Convert image to PDF page
+        # Convert image to PDF page and retain sidecar PNG for preview/edit
         # ---------------------------------------------------------------- #
         from .image_converter import convert_image_to_pages
-        pages, img_warnings = convert_image_to_pages(tmp_img.name, page_size)
-        warnings.extend(img_warnings)
-
-        try:
-            os.unlink(tmp_img.name)
-        except Exception:
-            pass
+        pages = convert_image_to_pages(tmp_img.name, page_size, temp_dir=temp_dir)
+        if pages:
+            sidecar_png = str(Path(pages[0]).with_suffix(".png"))
+            shutil.move(tmp_img.name, sidecar_png)
+        else:
+            try:
+                os.unlink(tmp_img.name)
+            except Exception:
+                pass
 
         warnings.append(
             f"ℹ️ 3D model '{Path(model_path).name}' rendered as a static image."
@@ -136,6 +142,7 @@ def convert_3d_to_pages(
         warnings.append(f"❌ 3D rendering failed: {e}")
         from .pdf_handler import _make_error_page
         err_path = _make_error_page(
-            f"3D rendering failed for:\n{Path(model_path).name}\n\n{e}"
+            f"3D rendering failed for:\n{Path(model_path).name}\n\n{e}",
+            temp_dir=temp_dir,
         )
         return [err_path], warnings

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdfmaker"
-version = "1.0.0"
+version = "2.0.0"
 description = "Desktop GUI application for combining and editing multi-format files into a single PDF"
 readme = "README.md"
 license = "MIT"

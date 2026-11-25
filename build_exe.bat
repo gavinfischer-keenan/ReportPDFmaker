@@ -7,7 +7,7 @@ REM   pip install -r requirements.txt
 REM
 REM Output:
 REM   dist\PDFMaker\PDFMaker.exe   (standalone folder)
-REM   dist\PDFMaker-1.0.0.zip      (zipped archive for release)
+REM   dist\PDFMaker-2.0.0.zip      (zipped archive for release)
 
 echo.
 echo ============================================================
@@ -31,13 +31,13 @@ if errorlevel 1 (
 REM Zip the output folder
 echo.
 echo Zipping dist\PDFMaker ...
-powershell -command "Compress-Archive -Path 'dist\PDFMaker' -DestinationPath 'dist\PDFMaker-1.0.0.zip' -Force"
+powershell -command "Compress-Archive -Path 'dist\PDFMaker' -DestinationPath 'dist\PDFMaker-2.0.0.zip' -Force"
 
 echo.
 echo ============================================================
 echo  Build complete!
 echo  Executable : dist\PDFMaker\PDFMaker.exe
-echo  Archive    : dist\PDFMaker-1.0.0.zip
+echo  Archive    : dist\PDFMaker-2.0.0.zip
 echo ============================================================
 echo.
 pause

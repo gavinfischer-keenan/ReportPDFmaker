@@ -7,6 +7,8 @@ All modal dialogs for PDF Maker:
   - ResetConfirmDialog
   - AboutDialog
   - ProgressDialog
+  - ShortcutsDialog
+  - CommandPaletteDialog
 """
 
 import tkinter as tk
@@ -15,10 +17,12 @@ from pathlib import Path
 from typing import Optional, Callable
 import customtkinter as ctk
 
+from .. import __version__
 from ..settings_manager import (
     DEFAULT_SETTINGS,
     FONT_OPTIONS,
     PAGE_NUMBER_STYLES,
+    PAGE_SIZE_OPTIONS,
     SettingsManager,
     compute_settings_diff,
 )
@@ -80,12 +84,13 @@ class WarningsDialog(ctk.CTkToplevel):
 class PageNumberSettingsDialog(ctk.CTkToplevel):
     """Grouped settings dialog with descriptions, sensible defaults, and change diff confirmation."""
 
-    def __init__(self, parent, settings: SettingsManager, on_apply: Optional[Callable] = None):
+    def __init__(self, parent, settings: SettingsManager, on_apply: Optional[Callable] = None, controller=None):
         super().__init__(parent)
         self.settings = settings
         self.on_apply = on_apply
+        self.controller = controller
         self.title("Document & Page Number Settings")
-        self.geometry("520x620")
+        self.geometry("540x680")
         self.resizable(False, False)
         self.grab_set()
 
@@ -96,21 +101,25 @@ class PageNumberSettingsDialog(ctk.CTkToplevel):
         ).pack(pady=(16, 2), padx=20, anchor="w")
         ctk.CTkLabel(
             self, text="Grouped preferences with sensible defaults. Raw margin offsets are managed automatically.",
-            font=ctk.CTkFont(size=11), text_color="gray", wraplength=470, justify="left"
+            font=ctk.CTkFont(size=11), text_color="gray", wraplength=490, justify="left"
         ).pack(padx=20, anchor="w", pady=(0, 8))
 
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=16, pady=4)
 
         # Group 1: Document Layout
-        self._add_group_header(scroll, "1. Document Layout", "Page dimensions used when rendering images and text.")
+        self._add_group_header(scroll, "1. Document Layout", "Page dimensions and optional page range for PDF export.")
         g1 = ctk.CTkFrame(scroll, corner_radius=8)
         g1.pack(fill="x", pady=(2, 10))
         g1.columnconfigure(1, weight=1)
 
         self._page_size_var = ctk.StringVar(value=settings.get("page_size", "A4"))
-        self._add_row(g1, 0, "Page Size:", "Standard dimensions for newly created pages.",
-                      ctk.CTkSegmentedButton(g1, values=["A4", "Letter"], variable=self._page_size_var))
+        self._add_row(g1, 0, "Page Size:", "Paper size or Fit to match image dimensions.",
+                      ctk.CTkOptionMenu(g1, values=PAGE_SIZE_OPTIONS, variable=self._page_size_var))
+
+        self._range_var = ctk.StringVar(value=settings.get("export_page_range", ""))
+        self._add_row(g1, 1, "Export Page Range:", "e.g. 1-3, 5 (leave blank for all pages).",
+                      ctk.CTkEntry(g1, textvariable=self._range_var, width=160, placeholder_text="All pages"))
 
         # Group 2: Page Numbering & Position
         self._add_group_header(scroll, "2. Page Numbering & Position", "Toggle numbers and choose where they appear on each page.")
@@ -166,6 +175,62 @@ class PageNumberSettingsDialog(ctk.CTkToplevel):
                      font=ctk.CTkFont(size=10)).pack(side="left")
         self._add_row(g3, 3, "Color:", "Hex text color for page numbers.", color_frame)
 
+        # Group 4: Watermark & Header/Footer
+        self._add_group_header(scroll, "4. Watermark & Header/Footer", "Optional diagonal stamp and top/bottom running text.")
+        g4 = ctk.CTkFrame(scroll, corner_radius=8)
+        g4.pack(fill="x", pady=(2, 10))
+        g4.columnconfigure(1, weight=1)
+
+        self._wm_text_var = ctk.StringVar(value=settings.get("watermark_text", ""))
+        self._add_row(g4, 0, "Watermark text:", "Centered diagonal stamp (e.g. DRAFT).",
+                      ctk.CTkEntry(g4, textvariable=self._wm_text_var, width=170, placeholder_text="None"))
+
+        self._wm_opacity_var = ctk.IntVar(value=int(round(float(settings.get("watermark_opacity", 0.18)) * 100)))
+        wm_op_frame = ctk.CTkFrame(g4, fg_color="transparent")
+        self._wm_op_slider = ctk.CTkSlider(
+            wm_op_frame, from_=5, to=60, variable=self._wm_opacity_var, width=130,
+            command=lambda v: self._wm_op_lbl.configure(text=f"{int(v)}%"),
+        )
+        self._wm_op_lbl = ctk.CTkLabel(wm_op_frame, text=f"{self._wm_opacity_var.get()}%", width=42)
+        self._wm_op_slider.pack(side="left")
+        self._wm_op_lbl.pack(side="left", padx=6)
+        self._add_row(g4, 1, "Watermark opacity:", "Transparency of watermark (5–60%).", wm_op_frame)
+
+        self._wm_color_var = ctk.StringVar(value=settings.get("watermark_color", "#64748b"))
+        self._add_row(g4, 2, "Watermark color:", "Hex color for diagonal watermark.",
+                      ctk.CTkEntry(g4, textvariable=self._wm_color_var, width=110))
+
+        self._header_var = ctk.StringVar(value=settings.get("header_text", ""))
+        self._add_row(g4, 3, "Header text:", "Top-left running header on every page.",
+                      ctk.CTkEntry(g4, textvariable=self._header_var, width=170, placeholder_text="None"))
+
+        self._footer_var = ctk.StringVar(value=settings.get("footer_text", ""))
+        self._add_row(g4, 4, "Footer text:", "Bottom-left running footer on every page.",
+                      ctk.CTkEntry(g4, textvariable=self._footer_var, width=170, placeholder_text="None"))
+
+        # Group 5: PDF Metadata & Security
+        self._add_group_header(scroll, "5. PDF Metadata & Security", "Embedded document properties and optional AES-256 password.")
+        g5 = ctk.CTkFrame(scroll, corner_radius=8)
+        g5.pack(fill="x", pady=(2, 10))
+        g5.columnconfigure(1, weight=1)
+
+        self._pdf_title_var = ctk.StringVar(value=settings.get("pdf_title", ""))
+        self._add_row(g5, 0, "Title:", "PDF document title metadata.",
+                      ctk.CTkEntry(g5, textvariable=self._pdf_title_var, width=170))
+
+        self._pdf_author_var = ctk.StringVar(value=settings.get("pdf_author", ""))
+        self._add_row(g5, 1, "Author:", "PDF author metadata.",
+                      ctk.CTkEntry(g5, textvariable=self._pdf_author_var, width=170))
+
+        self._pdf_subject_var = ctk.StringVar(value=settings.get("pdf_subject", ""))
+        self._add_row(g5, 2, "Subject:", "PDF subject metadata.",
+                      ctk.CTkEntry(g5, textvariable=self._pdf_subject_var, width=170))
+
+        init_pw = getattr(controller, "session_pdf_password", "") if controller else ""
+        self._pdf_pw_var = ctk.StringVar(value=init_pw)
+        self._add_row(g5, 3, "PDF Password:", "Session only — not saved to disk.",
+                      ctk.CTkEntry(g5, textvariable=self._pdf_pw_var, width=170, show="•", placeholder_text="Optional"))
+
         # Confirmation banner area
         self._diff_label = ctk.CTkLabel(
             self, text="", font=ctk.CTkFont(size=11), text_color="#2ecc71",
@@ -202,6 +267,7 @@ class PageNumberSettingsDialog(ctk.CTkToplevel):
 
     def _reset_defaults(self) -> None:
         self._page_size_var.set(DEFAULT_SETTINGS["page_size"])
+        self._range_var.set(DEFAULT_SETTINGS["export_page_range"])
         self._enabled_var.set(DEFAULT_SETTINGS["page_numbers"])
         self._skip_cover_var.set(DEFAULT_SETTINGS["skip_cover_page"])
         self._position_var.set(DEFAULT_SETTINGS["page_number_position"])
@@ -211,11 +277,23 @@ class PageNumberSettingsDialog(ctk.CTkToplevel):
         self._font_size_var.set(DEFAULT_SETTINGS["page_number_font_size"])
         self._fs_label.configure(text=f"{DEFAULT_SETTINGS['page_number_font_size']} pt")
         self._color_var.set(DEFAULT_SETTINGS["page_number_color"])
+        self._wm_text_var.set(DEFAULT_SETTINGS["watermark_text"])
+        wm_pct = int(round(DEFAULT_SETTINGS["watermark_opacity"] * 100))
+        self._wm_opacity_var.set(wm_pct)
+        self._wm_op_lbl.configure(text=f"{wm_pct}%")
+        self._wm_color_var.set(DEFAULT_SETTINGS["watermark_color"])
+        self._header_var.set(DEFAULT_SETTINGS["header_text"])
+        self._footer_var.set(DEFAULT_SETTINGS["footer_text"])
+        self._pdf_title_var.set(DEFAULT_SETTINGS["pdf_title"])
+        self._pdf_author_var.set(DEFAULT_SETTINGS["pdf_author"])
+        self._pdf_subject_var.set(DEFAULT_SETTINGS["pdf_subject"])
+        self._pdf_pw_var.set("")
         self._diff_label.configure(text="Restored sensible defaults (click Save & Apply to persist).", text_color="#f39c12")
 
     def _apply(self) -> None:
         updates = {
             "page_size":             self._page_size_var.get(),
+            "export_page_range":     self._range_var.get().strip(),
             "page_numbers":          self._enabled_var.get(),
             "skip_cover_page":       self._skip_cover_var.get(),
             "page_number_position":  self._position_var.get(),
@@ -224,7 +302,17 @@ class PageNumberSettingsDialog(ctk.CTkToplevel):
             "page_number_font":      self._font_var.get(),
             "page_number_font_size": int(self._font_size_var.get()),
             "page_number_color":     self._color_var.get().strip() or "#000000",
+            "watermark_text":        self._wm_text_var.get().strip(),
+            "watermark_opacity":     round(int(self._wm_opacity_var.get()) / 100.0, 2),
+            "watermark_color":       self._wm_color_var.get().strip() or "#64748b",
+            "header_text":           self._header_var.get().strip(),
+            "footer_text":           self._footer_var.get().strip(),
+            "pdf_title":             self._pdf_title_var.get().strip(),
+            "pdf_author":            self._pdf_author_var.get().strip(),
+            "pdf_subject":           self._pdf_subject_var.get().strip(),
         }
+        if self.controller is not None:
+            self.controller.session_pdf_password = self._pdf_pw_var.get()
         old_vals = {k: self.settings.get(k) for k in updates}
         changes = compute_settings_diff(old_vals, updates)
         self.settings.set_many(updates)
@@ -293,18 +381,19 @@ class AboutDialog(ctk.CTkToplevel):
         self.grab_set()
 
         ctk.CTkLabel(self, text="📄 PDF Maker", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(24, 4))
-        ctk.CTkLabel(self, text="Version 1.0.0", font=ctk.CTkFont(size=12), text_color="gray").pack()
+        ctk.CTkLabel(self, text=f"Version {__version__}", font=ctk.CTkFont(size=12), text_color="gray").pack()
         ctk.CTkLabel(
             self,
-            text="Combine images, PDFs, Word documents, text files,\n"
-                 "and 3D models into a single beautiful PDF.",
-            justify="center", wraplength=300, font=ctk.CTkFont(size=12)
+            text="Combine, edit, crop, number, and compress images, PDFs,\n"
+                 "Word documents, text files, and 3D models into one PDF.",
+            justify="center", wraplength=310, font=ctk.CTkFont(size=12)
         ).pack(pady=14)
         ctk.CTkLabel(
             self, text="github.com/gavinfischer-keenan/ReportPDFmaker",
             text_color="#4a9eff", font=ctk.CTkFont(size=11)
         ).pack()
         ctk.CTkButton(self, text="Close", width=100, command=self.destroy).pack(pady=18)
+        self.bind("<Escape>", lambda _: self.destroy())
         _center_on_parent(self, parent)
 
 
@@ -349,6 +438,11 @@ class ProgressDialog(ctk.CTkToplevel):
 
 DESKTOP_SHORTCUTS = [
     ("Ctrl + K", "Open Command Palette"),
+    ("Ctrl + O", "Open .nautilus Project"),
+    ("Ctrl + Shift + S", "Save .nautilus Project"),
+    ("Ctrl + Z", "Undo Last Action"),
+    ("Ctrl + Y", "Redo Last Action"),
+    ("Alt + ↑ / ↓", "Reorder Page Up / Down"),
     ("?", "Show Keyboard Shortcuts"),
     ("A", "Add Files to Document"),
     ("E", "Save / Export PDF"),
@@ -357,9 +451,10 @@ DESKTOP_SHORTCUTS = [
     ("O", "Toggle Portrait / Landscape"),
     ("N", "Toggle Page Numbers"),
     ("F", "Fit Preview Zoom"),
-    ("Delete", "Remove Selected Page"),
+    ("Delete / Backspace", "Remove Selected Page"),
     ("← / →", "Previous / Next Page"),
     ("T", "Toggle Dark / Light Theme"),
+    ("Esc", "Close Active Dialog"),
 ]
 
 

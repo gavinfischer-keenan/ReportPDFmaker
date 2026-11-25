@@ -26,3 +26,8 @@ class PDFMakerApp:
 
         window = MainWindow(self.controller, self.settings)
         window.mainloop()
+
+
+def main() -> None:
+    """Console/script entry point declared in pyproject.toml."""
+    PDFMakerApp().run()

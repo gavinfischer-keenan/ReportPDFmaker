@@ -258,7 +258,7 @@ def compress_pdf(
     -------
     CompressionResult
     """
-    import fitz  # PyMuPDF
+    import pymupdf
 
     def _progress(msg: str, frac: float) -> None:
         if progress_cb:
@@ -294,7 +294,7 @@ def compress_pdf(
 
     try:
         _progress("Opening PDF…", 0.02)
-        doc = fitz.open(input_path)
+        doc = pymupdf.open(input_path)
         n_pages = doc.page_count
 
         # ----------------------------------------------------------
@@ -356,6 +356,7 @@ def compress_pdf(
             _progress("Resampling images…", 0.15)
             total_images = 0
             done_images  = 0
+            processed_xrefs: set[int] = set()
 
             # Count total images first for progress
             for page in doc:
@@ -376,10 +377,17 @@ def compress_pdf(
                 except Exception:
                     img_list = []
 
+                smask_xrefs = {info[1] for info in img_list if len(info) > 1 and info[1]}
+
                 for img_info in img_list:
                     xref  = img_info[0]
                     w_px  = img_info[2]
                     h_px  = img_info[3]
+
+                    if xref in smask_xrefs or xref in processed_xrefs:
+                        done_images += 1
+                        continue
+                    processed_xrefs.add(xref)
 
                     # Estimate current DPI across width and height
                     current_dpi = _get_image_dpi(
@@ -416,22 +424,7 @@ def compress_pdf(
                         )
 
                         if new_bytes and len(new_bytes) < len(img_bytes):
-                            # Replace image stream in the PDF
-                            doc.update_stream(xref, new_bytes)
-                            # Update colorspace and filter metadata
-                            try:
-                                colorspace = (
-                                    "/DeviceGray" if do_grayscale else "/DeviceRGB"
-                                )
-                                doc.xref_set_key(xref, "ColorSpace", colorspace)
-                                doc.xref_set_key(xref, "Filter", "/DCTDecode")
-                                # Update dimensions if downsampled
-                                from PIL import Image as PilImage
-                                with PilImage.open(io.BytesIO(new_bytes)) as chk:
-                                    doc.xref_set_key(xref, "Width",  str(chk.width))
-                                    doc.xref_set_key(xref, "Height", str(chk.height))
-                            except Exception:
-                                pass
+                            page.replace_image(xref, stream=new_bytes)
 
                     except Exception as e:
                         print(f"[Compressor] xref {xref}: {e}")

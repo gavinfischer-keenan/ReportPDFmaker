@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml } from './html-utils.js';
+import { ModalFocusTrap } from './ui-feedback.js';
 
 export function scorePaletteItem(item, query) {
   const q = String(query || '').trim().toLowerCase();
@@ -67,6 +68,7 @@ export class CommandPalette {
 
     this.filteredItems = [];
     this.activeIndex = 0;
+    this.focusTrap = new ModalFocusTrap();
 
     this.bindEvents();
   }
@@ -121,12 +123,14 @@ export class CommandPalette {
     this.input.value = '';
     this.activeIndex = 0;
     this.render();
-    setTimeout(() => this.input?.focus(), 10);
+    this.focusTrap.activate(this.modal);
+    setTimeout(() => this.input?.focus(), 20);
   }
 
   close() {
     if (!this.modal) return;
     this.modal.classList.add('hidden');
+    this.focusTrap.deactivate(true);
   }
 
   toggle() {

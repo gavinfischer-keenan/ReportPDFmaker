@@ -17,6 +17,10 @@ export const CORE_SHORTCUTS = [
 ];
 
 export const EXTRA_SHORTCUTS = [
+  { key: 'Ctrl/⌘ + Z', actionId: 'undo', label: 'Undo Last Change', category: 'Edit' },
+  { key: 'Ctrl/⌘ + Y', actionId: 'redo', label: 'Redo Change', category: 'Edit' },
+  { key: 'Ctrl/⌘ + S', actionId: 'export-pdf', label: 'Quick Save / Export PDF', category: 'Document' },
+  { key: 'Alt + ↑ / ↓', actionId: 'move-up', label: 'Reorder Page Up / Down', category: 'Navigation' },
   { key: '← / [', actionId: 'prev-page', label: 'Previous Page', category: 'Navigation' },
   { key: '→ / ]', actionId: 'next-page', label: 'Next Page', category: 'Navigation' },
   { key: '+ / −', actionId: 'zoom-step', label: 'Zoom In / Zoom Out', category: 'View' },
@@ -98,12 +102,40 @@ export class ShortcutManager {
       return;
     }
 
-    // 4. Never fire single-key shortcuts while typing in inputs
+    // 4. Never fire single-key or edit shortcuts while typing in inputs
     if (typing) return;
 
-    // 5. Block single-key shortcuts when a modal (other than shortcuts overlay) is open
+    // 5. Block shortcuts when a modal (other than shortcuts overlay) is open
     if (openModalId && openModalId !== 'modal-shortcuts') {
       return;
+    }
+
+    // 6. Cmd/Ctrl+Z (Undo) and Cmd/Ctrl+Y / Cmd/Ctrl+Shift+Z (Redo)
+    if (isMod && !e.altKey && !openModalId) {
+      if (lower === 'z') {
+        e.preventDefault();
+        this.runAction(e.shiftKey ? 'redo' : 'undo');
+        return;
+      }
+      if (lower === 'y') {
+        e.preventDefault();
+        this.runAction('redo');
+        return;
+      }
+    }
+
+    // 7. Alt+ArrowUp / Alt+ArrowDown to reorder selected page
+    if (e.altKey && !isMod && !openModalId) {
+      if (key === 'ArrowUp') {
+        e.preventDefault();
+        this.runAction('move-up');
+        return;
+      }
+      if (key === 'ArrowDown') {
+        e.preventDefault();
+        this.runAction('move-down');
+        return;
+      }
     }
 
     // Ignore modifier combos (e.g. Ctrl+R reload, Ctrl+A select all, Ctrl+F find)

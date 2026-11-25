@@ -14,7 +14,7 @@ def check_dependencies() -> list[str]:
     """Check required packages and return list of missing ones."""
     required = {
         "customtkinter": "customtkinter",
-        "fitz": "pymupdf",
+        "pymupdf": "pymupdf",
         "PIL": "Pillow",
         "reportlab": "reportlab",
     }

@@ -9,6 +9,7 @@ If the text file is corrupted or unreadable, falls back to an error page.
 import os
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.styles import ParagraphStyle
@@ -62,6 +63,7 @@ def _escape_xml(text: str) -> str:
 def convert_text_to_pages(
     text_path: str,
     page_size: str = "A4",
+    temp_dir: Optional[str] = None,
 ) -> tuple[list[str], list[str]]:
     """
     Convert a text file to one or more single-page temp PDFs.
@@ -80,7 +82,7 @@ def convert_text_to_pages(
         text = f"[Error reading file: {Path(text_path).name}]\n{e}"
 
     # 2. Build PDF with ReportLab
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", dir=temp_dir, delete=False)
     tmp_path = tmp.name
     tmp.close()
 
@@ -125,14 +127,14 @@ def convert_text_to_pages(
         _write_error_pdf(tmp_path, str(e), page_dims)
 
     # 3. Split the multi-page PDF into individual page PDFs
-    return _split_pdf_to_pages(tmp_path, cleanup_source=True), warnings
+    return _split_pdf_to_pages(tmp_path, cleanup_source=True, temp_dir=temp_dir), warnings
 
 
 def _write_error_pdf(path: str, error_msg: str, page_dims) -> None:
     """Write a simple error-page PDF."""
     try:
-        import fitz
-        doc = fitz.open()
+        import pymupdf
+        doc = pymupdf.open()
         pw, ph = page_dims
         page = doc.new_page(width=pw, height=ph)
         page.insert_text((72, 72), f"Error rendering text:\n{error_msg}", fontsize=12)

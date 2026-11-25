@@ -6,7 +6,7 @@ Run with:
     pyinstaller pdfmaker.spec
 
 Output: dist/PDFMaker/PDFMaker.exe  (one-folder bundle)
-        dist/PDFMaker-1.0.0.zip     (zipped for distribution)
+        dist/PDFMaker-2.0.0.zip     (zipped for distribution)
 
 Requirements before building:
     pip install pyinstaller
@@ -33,7 +33,7 @@ a = Analysis(
     hiddenimports=[
         'customtkinter',
         'PIL._tkinter_finder',
-        'fitz',
+        'pymupdf',
         'reportlab',
         'reportlab.pdfgen',
         'reportlab.lib',

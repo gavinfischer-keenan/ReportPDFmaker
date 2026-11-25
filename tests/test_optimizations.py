@@ -2,7 +2,7 @@
 Tests for math optimizations, modularized helpers, and bug fixes across pdf_maker.
 """
 import os
-import fitz
+import pymupdf
 import pytest
 from PIL import Image
 
@@ -64,7 +64,7 @@ class TestFastImageDimensionLookup:
 class TestPdfHelpersAndSkipCover:
     def test_split_pdf_to_pages(self, tmp_path):
         src = tmp_path / "multi.pdf"
-        doc = fitz.open()
+        doc = pymupdf.open()
         for _ in range(3):
             doc.new_page(width=200, height=300)
         doc.save(str(src))
@@ -97,7 +97,7 @@ class TestPdfHelpersAndSkipCover:
             page_size="Letter",
         )
         assert ok, err
-        doc = fitz.open(str(out))
+        doc = pymupdf.open(str(out))
         assert len(doc) == 2
         # Page size Letter: 612 x 792
         assert doc[0].rect.width == pytest.approx(612.0, abs=0.5)

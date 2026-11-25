@@ -62,6 +62,7 @@ def detect_word() -> tuple[bool, str]:
 def convert_docx_to_pages(
     docx_path: str,
     page_size: str = "A4",
+    temp_dir: Optional[str] = None,
 ) -> tuple[list[str], list[str]]:
     """
     Convert a DOCX/DOC file to individual single-page temp PDFs.
@@ -94,7 +95,7 @@ def convert_docx_to_pages(
 
             if os.path.isfile(out_pdf) and os.path.getsize(out_pdf) > 0:
                 from .pdf_handler import split_pdf_to_pages
-                pages = split_pdf_to_pages(out_pdf, cleanup_source=True)
+                pages = split_pdf_to_pages(out_pdf, cleanup_source=True, temp_dir=temp_dir)
                 return pages, warnings
 
             warnings.append("⚠️ docx2pdf produced an empty file — falling back to text extraction.")
@@ -134,7 +135,7 @@ def convert_docx_to_pages(
 
         from .text_converter import convert_text_to_pages
 
-        pages, txt_warnings = convert_text_to_pages(tmp_txt_path, page_size)
+        pages, txt_warnings = convert_text_to_pages(tmp_txt_path, page_size, temp_dir=temp_dir)
         warnings.extend(txt_warnings)
 
         try:
@@ -163,6 +164,7 @@ def convert_docx_to_pages(
 
     err_path = _make_error_page(
         f"Could not convert Word document:\n{Path(docx_path).name}\n\n"
-        "Please ensure Microsoft Word or python-docx is installed."
+        "Please ensure Microsoft Word or python-docx is installed.",
+        temp_dir=temp_dir,
     )
     return [err_path], warnings

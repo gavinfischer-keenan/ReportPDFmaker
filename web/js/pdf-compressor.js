@@ -22,13 +22,13 @@ export async function compressPdf(fileOrBytes, level = 'standard', onProgress = 
 
   const originalSize = pdfBytes.byteLength;
 
-  // Level configuration
+  // Level configuration (72 PDF points = 1 inch)
   const config = {
-    light: { scale: 2.0, quality: 0.88, grayscale: false },
-    standard: { scale: 1.5, quality: 0.75, grayscale: false },
-    aggressive: { scale: 1.0, quality: 0.60, grayscale: false },
-    grayscale: { scale: 1.2, quality: 0.65, grayscale: true }
-  }[level] || { scale: 1.5, quality: 0.75, grayscale: false };
+    light: { scale: 200 / 72, quality: 0.88, grayscale: false },
+    standard: { scale: 150 / 72, quality: 0.75, grayscale: false },
+    aggressive: { scale: 96 / 72, quality: 0.50, grayscale: false },
+    grayscale: { scale: 120 / 72, quality: 0.65, grayscale: true }
+  }[level] || { scale: 150 / 72, quality: 0.75, grayscale: false };
 
   // Load document with PDF.js
   const loadingTask = window.pdfjsLib.getDocument({

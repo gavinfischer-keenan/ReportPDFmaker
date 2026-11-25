@@ -6,13 +6,15 @@ Centre panel: live preview of the selected page.
 Features
 --------
 * Renders image pages from source PIL for instant updates.
-* Zoom controls (-, +, Fit).
-* Page navigation arrows.
-* Corner resize handles for image pages:
+* Zoom controls (-, +, Fit) and page navigation arrows.
+* Live page number overlay when enabled.
+* Resize mode (green corner handles):
     - Drag any of the 4 green corner squares to resize the image.
     - Scale is locked to original aspect ratio.
     - Image clips hard to page edge with no buffer.
-* 'Fit' button resets scale to 1.0 (fill page edge-to-edge).
+* Crop mode (blue dashed box + corner handles):
+    - Drag any of the 4 blue corner squares to define a crop region.
+* 'Fill Page' button resets scale to 1.0 (fill page edge-to-edge).
 """
 
 import io
@@ -45,7 +47,8 @@ class PreviewPanel(ctk.CTkFrame):
         self._render_pending = False
         self._temp_crop: Optional[tuple[float, float, float, float]] = None
 
-        # Corner handle drag state
+        # Corner handle / pan drag state
+        self._drag_mode:        Optional[str]  = None   # 'handle'|'pan'
         self._drag_corner:      Optional[str]  = None   # 'nw'|'ne'|'sw'|'se'
         self._drag_start_x:     int = 0
         self._drag_start_y:     int = 0
@@ -104,10 +107,11 @@ class PreviewPanel(ctk.CTkFrame):
 
         self._canvas.bind("<Configure>", lambda e: self._on_canvas_resize())
 
-        # Mouse events for drag handles
+        # Mouse events for drag handles & panning
         self._canvas.bind("<ButtonPress-1>",   self._on_mouse_press)
         self._canvas.bind("<B1-Motion>",        self._on_mouse_drag)
         self._canvas.bind("<ButtonRelease-1>",  self._on_mouse_release)
+        self._canvas.bind("<Motion>",           self._on_mouse_move)
 
         # Bottom nav
         nav = ctk.CTkFrame(self, fg_color="transparent")
@@ -228,8 +232,9 @@ class PreviewPanel(ctk.CTkFrame):
         total     = self.controller.page_count
         page_size = self.controller.settings.get("page_size", "A4")
 
-        # Snapshot page number settings at render time so the overlay is live
+        # Snapshot page number & overlay settings at render time so the overlay is live
         pn_settings = self.controller.settings.get_page_number_settings()
+        overlay_cfg = self.controller.settings.get_overlay_settings()
 
         def _worker():
             from ..converters.pdf_builder import render_page_preview
@@ -240,6 +245,7 @@ class PreviewPanel(ctk.CTkFrame):
                 page_num=page_num,
                 total_pages=total,
                 ignore_crop=(self.controller.editor_mode == "crop"),
+                document_overlays=overlay_cfg,
             )
             self.after(0, lambda: self._display(png, page, zoom))
 
@@ -403,28 +409,83 @@ class PreviewPanel(ctk.CTkFrame):
     # Mouse drag for resizing
     # ------------------------------------------------------------------ #
 
-    def _on_mouse_press(self, event: tk.Event) -> None:
-        corner = self._hit_test_handle(event.x, event.y)
-        if corner is None:
+    def _is_in_image(self, x: int, y: int) -> bool:
+        if self._img_disp_w <= 0 or self._img_disp_h <= 0:
+            return False
+        hw = self._img_disp_w // 2
+        hh = self._img_disp_h // 2
+        return (self._img_cx - hw <= x <= self._img_cx + hw
+                and self._img_cy - hh <= y <= self._img_cy + hh)
+
+    def _on_mouse_move(self, event: tk.Event) -> None:
+        if self._drag_mode:
             return
-        self._drag_corner     = corner
-        self._drag_start_x    = event.x
-        self._drag_start_y    = event.y
         page = self.controller.current_page
-        if page:
-            if self.controller.editor_mode == "crop" and self._temp_crop:
-                self._drag_start_crop = self._temp_crop
-            else:
-                self._drag_start_scale = page.image_scale
-                self._drag_start_ox    = page.image_offset_x
-                self._drag_start_oy    = page.image_offset_y
+        if not page or not page.is_image:
+            self._canvas.configure(cursor="")
+            return
+        corner = self._hit_test_handle(event.x, event.y)
+        if corner in ("nw", "se"):
+            self._canvas.configure(cursor="size_nw_se")
+        elif corner in ("ne", "sw"):
+            self._canvas.configure(cursor="size_ne_sw")
+        elif self.controller.editor_mode == "resize" and self._is_in_image(event.x, event.y):
+            self._canvas.configure(cursor="fleur")
+        else:
+            self._canvas.configure(cursor="")
+
+    def _on_mouse_press(self, event: tk.Event) -> None:
+        page = self.controller.current_page
+        corner = self._hit_test_handle(event.x, event.y)
+        if corner is not None:
+            self._drag_mode    = "handle"
+            self._drag_corner  = corner
+            self._drag_start_x = event.x
+            self._drag_start_y = event.y
+            if page:
+                if self.controller.editor_mode == "crop" and self._temp_crop:
+                    self._drag_start_crop = self._temp_crop
+                else:
+                    if page.is_image:
+                        self.controller.save_undo_state(self.controller.current_index)
+                    self._drag_start_scale = page.image_scale
+                    self._drag_start_ox    = page.image_offset_x
+                    self._drag_start_oy    = page.image_offset_y
+            return
+
+        if (page and page.is_image
+                and self.controller.editor_mode == "resize"
+                and self._is_in_image(event.x, event.y)):
+            self.controller.save_undo_state(self.controller.current_index)
+            self._drag_mode        = "pan"
+            self._drag_start_x     = event.x
+            self._drag_start_y     = event.y
+            self._drag_start_scale = page.image_scale
+            self._drag_start_ox    = page.image_offset_x
+            self._drag_start_oy    = page.image_offset_y
 
     def _on_mouse_drag(self, event: tk.Event) -> None:
-        if not self._drag_corner:
+        if not self._drag_mode:
             return
         page = self.controller.current_page
         idx  = self.controller.current_index
         if not page or not page.is_image or idx < 0:
+            return
+
+        if self._drag_mode == "pan":
+            zoom = ZOOM_STEPS[self._zoom_idx]
+            dx_pt = (event.x - self._drag_start_x) / zoom
+            dy_pt = (event.y - self._drag_start_y) / zoom
+            self.controller.resize_image(
+                idx,
+                self._drag_start_scale,
+                round(self._drag_start_ox + dx_pt, 1),
+                round(self._drag_start_oy + dy_pt, 1),
+                save_undo=False,
+            )
+            return
+
+        if not self._drag_corner:
             return
 
         if self.controller.editor_mode == "crop" and getattr(self, "_drag_start_crop", None):
@@ -456,10 +517,6 @@ class PreviewPanel(ctk.CTkFrame):
         dx = event.x - self._img_cx
         dy = event.y - self._img_cy
 
-        # Original distance from centre to the corner
-        orig_hw = self._img_disp_w / 2
-        orig_hh = self._img_disp_h / 2
-
         # New distance in the dominant axis (to maintain aspect ratio)
         orig_dist = max(abs(hx - self._img_cx), abs(hy - self._img_cy))
         curr_dist = max(abs(dx), abs(dy))
@@ -470,12 +527,17 @@ class PreviewPanel(ctk.CTkFrame):
         delta_ratio = curr_dist / orig_dist
         new_scale   = max(0.05, self._drag_start_scale * delta_ratio)
 
-        self.controller.resize_image(idx, new_scale,
-                                     self._drag_start_ox,
-                                     self._drag_start_oy)
+        self.controller.resize_image(
+            idx,
+            new_scale,
+            self._drag_start_ox,
+            self._drag_start_oy,
+            save_undo=False,
+        )
 
     def _on_mouse_release(self, event: tk.Event) -> None:
         self._drag_corner = None
+        self._drag_mode   = None
 
     # ------------------------------------------------------------------ #
     # Scale reset

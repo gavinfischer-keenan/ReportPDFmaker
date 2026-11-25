@@ -29,7 +29,7 @@
     </div>
 
     <div class="header-actions">
-      <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.svg,.pdf,.docx,.txt,.md,.csv,.gltf,.glb" class="hidden">
+      <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.svg,.pdf,.docx,.txt,.md,.csv,.log,.json,.gltf,.glb" class="hidden">
 
       <button type="button" id="btn-command-palette" class="btn btn-secondary btn-palette" title="Search commands, pages &amp; recent items (Ctrl/Cmd+K)">
         <span class="btn-emoji">⌘</span>
@@ -171,6 +171,14 @@
       </div>
 
       <div class="editor-scroll">
+        <!-- Global Undo / Redo Bar -->
+        <div class="editor-content" style="padding-bottom: 0;">
+          <div class="button-group-duo">
+            <button type="button" id="btn-undo" class="btn btn-secondary btn-sm" title="Undo (Ctrl/⌘+Z)" disabled>↩️ Undo</button>
+            <button type="button" id="btn-redo" class="btn btn-secondary btn-sm" title="Redo (Ctrl/⌘+Y)" disabled>↪️ Redo</button>
+          </div>
+        </div>
+
         <!-- Empty Page Inspector State -->
         <div id="empty-editor-message" class="empty-state-wrap">
           <div class="empty-state-card">
@@ -188,6 +196,16 @@
 
         <!-- Per-Page Controls -->
         <div id="page-editor-controls" class="editor-content hidden">
+          <!-- Image Editing Mode -->
+          <div class="editor-section">
+            <span class="section-label">Image Editing</span>
+            <div class="button-group-duo">
+              <button type="button" id="btn-mode-resize" class="btn btn-secondary btn-sm active">↔️ Resize</button>
+              <button type="button" id="btn-mode-crop" class="btn btn-secondary btn-sm">✂️ Crop</button>
+            </div>
+            <button type="button" id="btn-apply-crop" class="btn btn-primary btn-sm hidden">✂️ Apply Crop</button>
+          </div>
+
           <!-- Page Orientation -->
           <div class="editor-section">
             <span class="section-label">Page Orientation</span>
@@ -208,7 +226,7 @@
             <span class="section-label">Rotate Image Content</span>
             <div class="button-group-grid">
               <button type="button" id="btn-rotate-0" class="btn btn-secondary btn-sm" data-rot="0">0°</button>
-              <button type="button" id="btn-rotate-90" class="btn btn-secondary btn-sm" data-rot="90">+90°</button>
+              <button type="button" id="btn-rotate-90" class="btn btn-secondary btn-sm" data-rot="90">90°</button>
               <button type="button" id="btn-rotate-180" class="btn btn-secondary btn-sm" data-rot="180">180°</button>
               <button type="button" id="btn-rotate-270" class="btn btn-secondary btn-sm" data-rot="270">270°</button>
             </div>
@@ -236,7 +254,33 @@
               <button type="button" id="btn-move-up" class="btn btn-secondary btn-sm">▲ Move Up</button>
               <button type="button" id="btn-move-down" class="btn btn-secondary btn-sm">▼ Move Down</button>
             </div>
+            <div class="button-group-duo">
+              <button type="button" id="btn-duplicate-page" class="btn btn-secondary btn-sm">📄 Duplicate</button>
+              <button type="button" id="btn-insert-blank" class="btn btn-secondary btn-sm">➕ Blank Page</button>
+            </div>
             <button type="button" id="btn-delete-page" class="btn btn-danger btn-sm">🗑️ Delete Page</button>
+          </div>
+        </div>
+
+        <!-- Entire Document Batch Controls -->
+        <div id="entire-doc-controls" class="editor-content hidden" style="padding-top: 0;">
+          <hr class="section-divider">
+          <div class="editor-section">
+            <span class="section-label">Entire Document</span>
+            <div class="button-group-grid">
+              <button type="button" id="btn-rotate-all-0" class="btn btn-secondary btn-sm" data-rot="0">All 0°</button>
+              <button type="button" id="btn-rotate-all-90" class="btn btn-secondary btn-sm" data-rot="90">All 90°</button>
+              <button type="button" id="btn-rotate-all-180" class="btn btn-secondary btn-sm" data-rot="180">All 180°</button>
+              <button type="button" id="btn-rotate-all-270" class="btn btn-secondary btn-sm" data-rot="270">All 270°</button>
+            </div>
+            <div class="button-group-duo">
+              <button type="button" id="btn-all-portrait" class="btn btn-secondary btn-sm">📄 All Portrait</button>
+              <button type="button" id="btn-all-landscape" class="btn btn-secondary btn-sm">🖼️ All Landscape</button>
+            </div>
+            <div class="button-group-duo">
+              <button type="button" id="btn-reverse-pages" class="btn btn-secondary btn-sm">⇅ Reverse</button>
+              <button type="button" id="btn-sort-pages" class="btn btn-secondary btn-sm">🔤 Sort A→Z</button>
+            </div>
           </div>
         </div>
 
@@ -326,6 +370,10 @@
               <select id="doc-page-size" class="form-select">
                 <option value="A4">A4 (210 × 297 mm)</option>
                 <option value="Letter">US Letter (8.5 × 11 in)</option>
+                <option value="Legal">US Legal (8.5 × 14 in)</option>
+                <option value="A3">A3 (297 × 420 mm)</option>
+                <option value="A5">A5 (148 × 210 mm)</option>
+                <option value="Fit">Fit (Match Image Size)</option>
               </select>
               <span class="field-help">Standard paper geometry applied to newly formatted pages.</span>
             </div>
@@ -413,6 +461,10 @@
             <select id="set-page-size" class="form-select setting-control">
               <option value="A4">A4 (210 × 297 mm)</option>
               <option value="Letter">US Letter (8.5 × 11 in)</option>
+              <option value="Legal">US Legal (8.5 × 14 in)</option>
+              <option value="A3">A3 (297 × 420 mm)</option>
+              <option value="A5">A5 (148 × 210 mm)</option>
+              <option value="Fit">Fit (Match Image Size)</option>
             </select>
           </div>
 
@@ -539,6 +591,14 @@
 
           <div class="setting-item">
             <div class="setting-info">
+              <label class="setting-label" for="set-export-page-range">Export Page Range</label>
+              <p class="setting-desc">Optional 1-based range (e.g. 1-3, 5). Leave blank to export all pages.</p>
+            </div>
+            <input type="text" id="set-export-page-range" class="form-input setting-control" placeholder="All pages">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
               <label class="setting-label" for="set-theme">Workspace Theme</label>
               <p class="setting-desc">Switch between high-contrast dark studio mode and crisp light mode.</p>
             </div>
@@ -546,6 +606,71 @@
               <option value="dark">Dark Mode</option>
               <option value="light">Light Mode</option>
             </select>
+          </div>
+        </section>
+
+        <!-- Group 4: Watermark, Header/Footer & Metadata -->
+        <section class="settings-group">
+          <h3 class="settings-group-title">4. Watermark, Header/Footer &amp; PDF Metadata</h3>
+          <p class="settings-group-desc">Stamp diagonal watermarks, running headers/footers, and embedded document properties.</p>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-watermark-text">Watermark Text</label>
+              <p class="setting-desc">Centered diagonal stamp across every exported page (e.g. DRAFT).</p>
+            </div>
+            <input type="text" id="set-watermark-text" class="form-input setting-control" placeholder="None">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-watermark-opacity">Watermark Opacity &amp; Color</label>
+              <p class="setting-desc">Adjust transparency (5%–60%) and ink color for the watermark.</p>
+            </div>
+            <div class="form-row-inline setting-control">
+              <input type="range" id="set-watermark-opacity" min="5" max="60" value="18" aria-label="Watermark opacity percentage">
+              <input type="color" id="set-watermark-color" class="form-color" value="#64748b" aria-label="Watermark color">
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-header-text">Running Header</label>
+              <p class="setting-desc">Top-left text stamped on all pages.</p>
+            </div>
+            <input type="text" id="set-header-text" class="form-input setting-control" placeholder="None">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-footer-text">Running Footer</label>
+              <p class="setting-desc">Bottom-left text stamped on all pages.</p>
+            </div>
+            <input type="text" id="set-footer-text" class="form-input setting-control" placeholder="None">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-pdf-title">PDF Title</label>
+              <p class="setting-desc">Document title metadata property.</p>
+            </div>
+            <input type="text" id="set-pdf-title" class="form-input setting-control" placeholder="Optional">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-pdf-author">PDF Author</label>
+              <p class="setting-desc">Document author metadata property.</p>
+            </div>
+            <input type="text" id="set-pdf-author" class="form-input setting-control" placeholder="Optional">
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <label class="setting-label" for="set-pdf-subject">PDF Subject</label>
+              <p class="setting-desc">Document subject metadata property.</p>
+            </div>
+            <input type="text" id="set-pdf-subject" class="form-input setting-control" placeholder="Optional">
           </div>
         </section>
 
@@ -576,7 +701,7 @@
         <div id="shrink-drop-zone" class="drop-zone-mini" tabindex="0" role="button">
           <div class="drop-zone-icon">📄</div>
           <div class="drop-zone-text">Click or drag a PDF here to compress</div>
-          <div class="drop-zone-sub">Processes entirely inside your browser. Original file is kept if compression does not shrink size.</div>
+          <div class="drop-zone-sub">Processes entirely inside your browser. Compression rasterizes pages (removing searchable text and links); the original file is kept if rasterization does not reduce size.</div>
         </div>
 
         <div id="shrink-empty-helper" class="shrink-empty-helper">
@@ -598,7 +723,7 @@
             <label class="compression-card">
               <input type="radio" name="shrink-level" value="light">
               <strong>Light</strong>
-              <span>High resolution (300 DPI)</span>
+              <span>High resolution (200 DPI)</span>
             </label>
             <label class="compression-card">
               <input type="radio" name="shrink-level" value="standard" checked>
@@ -613,7 +738,7 @@
             <label class="compression-card">
               <input type="radio" name="shrink-level" value="grayscale">
               <strong>Grayscale</strong>
-              <span>Black &amp; White document</span>
+              <span>Black &amp; White (120 DPI)</span>
             </label>
           </div>
         </div>
@@ -660,6 +785,26 @@
         <button type="button" id="btn-capture-3d" class="btn btn-primary">
           📸 Capture to Page
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notifications Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Modal: Inline Confirmation Dialog -->
+  <div id="modal-confirm" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div class="modal-box modal-box-confirm">
+      <div class="modal-header">
+        <h2 id="confirm-modal-title">Confirm Action</h2>
+        <button type="button" id="btn-close-confirm" class="btn-close" aria-label="Close confirmation">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-modal-message" class="confirm-modal-message"></p>
+      </div>
+      <div class="modal-footer modal-footer-actions">
+        <button type="button" id="btn-confirm-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+        <button type="button" id="btn-confirm-ok" class="btn btn-primary btn-sm">Confirm</button>
       </div>
     </div>
   </div>

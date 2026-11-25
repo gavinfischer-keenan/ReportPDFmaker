@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import {
   clamp,
@@ -6,7 +7,8 @@ import {
   dataUrlToUint8Array,
   parseHexColorRgb01,
   formatPageNumberText,
-  formatFileSize
+  formatFileSize,
+  parsePageRange
 } from '../js/math-utils.js';
 import { wrapTextLines } from '../js/text-layout.js';
 import { filterPaletteItems, scorePaletteItem } from '../js/command-palette.js';
@@ -14,7 +16,8 @@ import { CORE_SHORTCUTS, isTypingInInput, ShortcutManager } from '../js/shortcut
 import { computeSettingsDiff } from '../js/settings-ui.js';
 
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };
-const { state, DEFAULT_SETTINGS } = await import('../js/state.js');
+const { state, DEFAULT_SETTINGS, PageItem, getPageDimensions } = await import('../js/state.js');
+const { serializeSessionPages, deserializeSessionPages } = await import('../js/session-store.js');
 
 // 1. math-utils.js checks
 assert.equal(clamp(15, 0, 10), 10);
@@ -130,5 +133,125 @@ state.updateSettings({ pageSize: 'Letter' });
 assert.equal(state.settings.pageSize, 'Letter');
 state.resetSettings();
 assert.equal(state.settings.pageSize, DEFAULT_SETTINGS.pageSize);
+
+// 7. Web multi-step Undo / Redo + batch actions + Ctrl+Z / Ctrl+Y shortcuts
+state.clearAll();
+state._undoStack = [];
+state._redoStack = [];
+state.addPages([
+  new PageItem({ id: 'u1', name: 'One.png', sourceType: 'image' }),
+  new PageItem({ id: 'u2', name: 'Two.png', sourceType: 'image' })
+]);
+state.selectPage(0);
+state.updateCurrentPage({ imageRotation: 90 });
+state.rotateAllPages(180);
+state.setAllOrientation(true);
+state.movePage(0, 1);
+state.removePage(1);
+assert.equal(state.pages.length, 1);
+
+assert.equal(state.undo(), true);
+assert.equal(state.pages.length, 2);
+assert.equal(state.pages[1].id, 'u1');
+
+assert.equal(state.undo(), true);
+assert.equal(state.pages[0].id, 'u1');
+
+assert.equal(state.undo(), true);
+assert.equal(state.pages.every(p => p.pageLandscape === false), true);
+
+assert.equal(state.redo(), true);
+assert.equal(state.pages.every(p => p.pageLandscape === true), true);
+
+// ShortcutManager Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z with input guard
+const histTriggered = [];
+const histMgr = new ShortcutManager({
+  runAction: (id) => histTriggered.push(id),
+  getOpenModalId: () => null,
+  closeTopModal: () => {},
+  onToggleShortcuts: () => {}
+});
+histMgr.handleKeyDown({ key: 'z', ctrlKey: true, target: { tagName: 'INPUT', type: 'text' }, preventDefault() {} });
+assert.deepEqual(histTriggered, []);
+histMgr.handleKeyDown({ key: 'z', ctrlKey: true, target: { tagName: 'BODY' }, preventDefault() {} });
+histMgr.handleKeyDown({ key: 'y', ctrlKey: true, target: { tagName: 'BODY' }, preventDefault() {} });
+histMgr.handleKeyDown({ key: 'z', ctrlKey: true, shiftKey: true, target: { tagName: 'BODY' }, preventDefault() {} });
+assert.deepEqual(histTriggered, ['undo', 'redo', 'redo']);
+
+// 8. Phase 3: parsePageRange, custom page sizes, duplicate/blank/reverse/sort, settings diff
+assert.deepEqual(parsePageRange('', 4), [0, 1, 2, 3]);
+assert.deepEqual(parsePageRange('1, 4-3', 5), [0, 3, 2]);
+assert.throws(() => parsePageRange('0', 4));
+assert.throws(() => parsePageRange('9', 4));
+
+assert.deepEqual(getPageDimensions(false, 'Legal'), [612.0, 1008.0]);
+assert.deepEqual(getPageDimensions(true, 'A3'), [1190.55, 841.89]);
+const fitDims = getPageDimensions(false, 'Fit', new PageItem({ sourceImage: { naturalWidth: 2000, naturalHeight: 1000 } }));
+assert(Math.abs(fitDims[0] - 841.89) < 0.5 && Math.abs(fitDims[1] - 420.95) < 0.5);
+
+state.clearAll();
+state.addPages([
+  new PageItem({ id: 's10', name: 'doc10.png', sourceType: 'image' }),
+  new PageItem({ id: 's2', name: 'doc2.png', sourceType: 'image' })
+]);
+state.sortPagesByName();
+assert.deepEqual(state.pages.map(p => p.name), ['doc2.png', 'doc10.png']);
+state.duplicatePage(0);
+assert.equal(state.pages.length, 3);
+state.insertBlankPage(1, 'Divider');
+assert.equal(state.pages[2].sourceType, 'blank');
+state.reversePages();
+assert.equal(state.pages[0].name, 'doc10.png');
+
+const phase3Diffs = computeSettingsDiff(
+  { ...DEFAULT_SETTINGS },
+  { ...DEFAULT_SETTINGS, watermarkText: 'DRAFT', pdfTitle: 'Audit' }
+);
+assert.equal(phase3Diffs.length, 2);
+
+// 9. Phase 4: session serialization round-trip, Alt+Up/Down reordering, no alert/confirm
+const sessPages = [
+  new PageItem({
+    id: 'sp1',
+    name: 'PageOne.png',
+    sourceType: 'image',
+    imageRotation: 90,
+    imageScale: 1.5,
+    imageCrop: [0.1, 0.1, 0.9, 0.9],
+    sourceImage: { src: 'data:image/png;base64,AA==' }
+  }),
+  new PageItem({
+    id: 'sp2',
+    name: 'Note.txt',
+    sourceType: 'text',
+    textContent: 'Saved body',
+    textHeader: 'Note.txt — Page 1'
+  })
+];
+const payload = serializeSessionPages(sessPages, 1);
+const restored = await deserializeSessionPages(payload, async (url) => ({ src: url, naturalWidth: 10, naturalHeight: 10 }));
+assert.equal(restored.pages.length, 2);
+assert.equal(restored.currentIndex, 1);
+assert.equal(restored.pages[0].imageRotation, 90);
+assert.deepEqual(restored.pages[0].imageCrop, [0.1, 0.1, 0.9, 0.9]);
+assert.equal(restored.pages[1].textContent, 'Saved body');
+
+const altTriggered = [];
+const altMgr = new ShortcutManager({
+  runAction: (id) => altTriggered.push(id),
+  getOpenModalId: () => null,
+  closeTopModal: () => {},
+  onToggleShortcuts: () => {}
+});
+altMgr.handleKeyDown({ key: 'ArrowUp', altKey: true, target: { tagName: 'INPUT', type: 'text' }, preventDefault() {} });
+assert.deepEqual(altTriggered, []);
+altMgr.handleKeyDown({ key: 'ArrowUp', altKey: true, target: { tagName: 'BODY' }, preventDefault() {} });
+altMgr.handleKeyDown({ key: 'ArrowDown', altKey: true, target: { tagName: 'BODY' }, preventDefault() {} });
+assert.deepEqual(altTriggered, ['move-up', 'move-down']);
+
+for (const jsFile of ['../js/app.js', '../js/three-viewer.js']) {
+  const src = fs.readFileSync(new URL(jsFile, import.meta.url), 'utf8');
+  assert(!/\b(alert|confirm)\(/.test(src), `${jsFile} should use non-blocking toast/confirmDialog instead of alert()/confirm()`);
+}
 
 console.log('PASS: math-utils, O(N) text-layout, command-palette, shortcuts input-guard, settings diff, and state recents.');

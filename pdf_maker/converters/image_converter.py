@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-import fitz  # PyMuPDF
+import pymupdf
 from PIL import Image, ImageOps
 
 # Standard page dimensions in points (1 pt = 1/72 inch)
@@ -33,14 +33,18 @@ def _apply_exif_orientation(img: Image.Image) -> Image.Image:
     return img
 
 
-def _pil_image_to_pdf_page(img: Image.Image, page_size: str = "A4") -> str:
+def _pil_image_to_pdf_page(
+    img: Image.Image,
+    page_size: str = "A4",
+    temp_dir: Optional[str] = None,
+) -> str:
     """
     Render a PIL Image onto a new single-page PDF.
     Returns the path to the temp PDF file.
     """
     pw, ph = PAGE_SIZES.get(page_size, PAGE_SIZES["A4"])
 
-    # Flatten alpha channels (fitz doesn't like alpha PNGs on all platforms)
+    # Flatten alpha channels (pymupdf/PDF needs RGB without alpha PNG issues)
     if img.mode in ("RGBA", "LA", "P"):
         background = Image.new("RGB", img.size, (255, 255, 255))
         if img.mode == "P":
@@ -64,17 +68,17 @@ def _pil_image_to_pdf_page(img: Image.Image, page_size: str = "A4") -> str:
     x_offset = (pw - scaled_w) / 2
     y_offset = (ph - scaled_h) / 2
 
-    # Convert PIL → bytes for fitz
+    # Convert PIL → bytes for PyMuPDF
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     img_bytes = buf.getvalue()
 
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page(width=pw, height=ph)
-    rect = fitz.Rect(x_offset, y_offset, x_offset + scaled_w, y_offset + scaled_h)
+    rect = pymupdf.Rect(x_offset, y_offset, x_offset + scaled_w, y_offset + scaled_h)
     page.insert_image(rect, stream=img_bytes)
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", dir=temp_dir, delete=False)
     tmp_path = tmp.name
     tmp.close()
     doc.save(tmp_path)
@@ -86,6 +90,7 @@ def convert_image_to_pages(
     image_path: str,
     page_size: str = "A4",
     gif_all_frames: bool = True,
+    temp_dir: Optional[str] = None,
 ) -> list[str]:
     """
     Convert an image file to one or more single-page temp PDFs.
@@ -114,13 +119,18 @@ def convert_image_to_pages(
     except AttributeError:
         # Non-animated image
         frames = [img.convert("RGB")]
+    finally:
+        try:
+            img.close()
+        except Exception:
+            pass
 
     if not frames:
-        frames = [img.convert("RGB")]
+        frames = []
 
     result: list[str] = []
     for frame in frames:
-        pdf_path = _pil_image_to_pdf_page(frame, page_size)
+        pdf_path = _pil_image_to_pdf_page(frame, page_size, temp_dir=temp_dir)
         result.append(pdf_path)
 
     return result

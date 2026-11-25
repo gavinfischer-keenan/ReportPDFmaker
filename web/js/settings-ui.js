@@ -6,12 +6,20 @@
 
 import { DEFAULT_SETTINGS } from './state.js';
 import { escapeHtml } from './html-utils.js';
+import { ModalFocusTrap } from './ui-feedback.js';
 
 export const SETTING_META = {
   pageSize: {
     label: 'Page Size',
     group: 'Document Layout & Import Defaults',
-    format: (v) => (v === 'Letter' ? 'US Letter (8.5 × 11 in)' : 'A4 (210 × 297 mm)')
+    format: (v) => ({
+      A4: 'A4 (210 × 297 mm)',
+      Letter: 'US Letter (8.5 × 11 in)',
+      Legal: 'US Legal (8.5 × 14 in)',
+      A3: 'A3 (297 × 420 mm)',
+      A5: 'A5 (148 × 210 mm)',
+      Fit: 'Fit (Match Image)'
+    }[v] || v)
   },
   defaultOrientation: {
     label: 'Default Orientation',
@@ -77,6 +85,51 @@ export const SETTING_META = {
     label: 'Appearance Theme',
     group: 'Export, Quality & Appearance',
     format: (v) => (v === 'light' ? 'Light' : 'Dark')
+  },
+  exportPageRange: {
+    label: 'Export Page Range',
+    group: 'Export, Quality & Appearance',
+    format: (v) => (v ? v : 'All pages')
+  },
+  watermarkText: {
+    label: 'Watermark Text',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => (v ? v : 'None')
+  },
+  watermarkOpacity: {
+    label: 'Watermark Opacity',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => `${Math.round((Number(v) || 0.18) * 100)}%`
+  },
+  watermarkColor: {
+    label: 'Watermark Color',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => String(v || '#64748b').toUpperCase()
+  },
+  headerText: {
+    label: 'Running Header',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => (v ? v : 'None')
+  },
+  footerText: {
+    label: 'Running Footer',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => (v ? v : 'None')
+  },
+  pdfTitle: {
+    label: 'PDF Title',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => (v ? v : 'None')
+  },
+  pdfAuthor: {
+    label: 'PDF Author',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => (v ? v : 'None')
+  },
+  pdfSubject: {
+    label: 'PDF Subject',
+    group: 'Watermark, Header/Footer & Metadata',
+    format: (v) => (v ? v : 'None')
   }
 };
 
@@ -107,6 +160,7 @@ export class SettingsUI {
     this.onLayoutChanged = onLayoutChanged;
     this.savedBaseline = { ...state.settings };
     this._quickTimer = null;
+    this.focusTrap = new ModalFocusTrap();
 
     this.bindQuickControls();
     this.bindSettingsModal();
@@ -245,7 +299,16 @@ export class SettingsUI {
       pageNumberColor: document.getElementById('set-num-color'),
       outputFilename: document.getElementById('set-output-filename'),
       exportQuality: document.getElementById('set-export-quality'),
-      theme: document.getElementById('set-theme')
+      exportPageRange: document.getElementById('set-export-page-range'),
+      theme: document.getElementById('set-theme'),
+      watermarkText: document.getElementById('set-watermark-text'),
+      watermarkOpacity: document.getElementById('set-watermark-opacity'),
+      watermarkColor: document.getElementById('set-watermark-color'),
+      headerText: document.getElementById('set-header-text'),
+      footerText: document.getElementById('set-footer-text'),
+      pdfTitle: document.getElementById('set-pdf-title'),
+      pdfAuthor: document.getElementById('set-pdf-author'),
+      pdfSubject: document.getElementById('set-pdf-subject')
     };
 
     this.btnOpen?.addEventListener('click', () => this.openModal());
@@ -277,10 +340,12 @@ export class SettingsUI {
     this.saveBannerEl?.classList.add('hidden');
     this.updatePendingDiffPreview();
     this.modal.classList.remove('hidden');
+    this.focusTrap.activate(this.modal);
   }
 
   closeModal() {
     this.modal?.classList.add('hidden');
+    this.focusTrap.deactivate(true);
   }
 
   populateModalFromValues(values) {
@@ -298,7 +363,16 @@ export class SettingsUI {
     if (m.pageNumberColor) m.pageNumberColor.value = values.pageNumberColor || '#1e293b';
     if (m.outputFilename) m.outputFilename.value = values.outputFilename || 'Report.pdf';
     if (m.exportQuality) m.exportQuality.value = values.exportQuality || 'archival';
+    if (m.exportPageRange) m.exportPageRange.value = values.exportPageRange || '';
     if (m.theme) m.theme.value = values.theme || 'dark';
+    if (m.watermarkText) m.watermarkText.value = values.watermarkText || '';
+    if (m.watermarkOpacity) m.watermarkOpacity.value = Math.round((Number(values.watermarkOpacity) || 0.18) * 100);
+    if (m.watermarkColor) m.watermarkColor.value = values.watermarkColor || '#64748b';
+    if (m.headerText) m.headerText.value = values.headerText || '';
+    if (m.footerText) m.footerText.value = values.footerText || '';
+    if (m.pdfTitle) m.pdfTitle.value = values.pdfTitle || '';
+    if (m.pdfAuthor) m.pdfAuthor.value = values.pdfAuthor || '';
+    if (m.pdfSubject) m.pdfSubject.value = values.pdfSubject || '';
   }
 
   readModalValues() {
@@ -318,7 +392,16 @@ export class SettingsUI {
       pageNumberColor: m.pageNumberColor?.value || '#1e293b',
       outputFilename: (m.outputFilename?.value || '').trim() || 'Report.pdf',
       exportQuality: m.exportQuality?.value || 'archival',
-      theme: m.theme?.value || 'dark'
+      exportPageRange: (m.exportPageRange?.value || '').trim(),
+      theme: m.theme?.value || 'dark',
+      watermarkText: (m.watermarkText?.value || '').trim(),
+      watermarkOpacity: Math.round(Math.max(5, Math.min(60, parseInt(m.watermarkOpacity?.value, 10) || 18))) / 100,
+      watermarkColor: m.watermarkColor?.value || '#64748b',
+      headerText: (m.headerText?.value || '').trim(),
+      footerText: (m.footerText?.value || '').trim(),
+      pdfTitle: (m.pdfTitle?.value || '').trim(),
+      pdfAuthor: (m.pdfAuthor?.value || '').trim(),
+      pdfSubject: (m.pdfSubject?.value || '').trim()
     };
   }
 

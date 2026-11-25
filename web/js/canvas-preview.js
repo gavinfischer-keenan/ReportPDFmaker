@@ -21,15 +21,18 @@ export class CanvasPreview {
 
     // Interaction state
     this.isDragging = false;
-    this.dragMode = null; // 'handle-nw' | 'handle-ne' | 'handle-sw' | 'handle-se' | 'pan'
+    this.dragMode = null; // 'handle-nw' | 'handle-ne' | 'handle-sw' | 'handle-se' | 'crop-*' | 'pan'
     this.dragStartMouse = { x: 0, y: 0 };
     this.dragStartScale = 1.0;
     this.dragStartOffset = { x: 0, y: 0 };
+    this.dragStartCrop = null;
+    this.tempCrop = null;
 
     // Geometry caches
     this.pageRect = { x: 0, y: 0, w: 0, h: 0 };
     this.imgRect = { x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0 };
     this.handles = {};
+    this.cropHandles = {};
 
     this.HANDLE_SIZE = 8; // px half-side
     this.HANDLE_HIT_RADIUS = 14;
@@ -94,10 +97,21 @@ export class CanvasPreview {
 
     // Listen to state events
     state.on('page_selected', () => {
+      const page = state.getCurrentPage();
+      this.tempCrop = (state.editorMode === 'crop' && page)
+        ? [...(page.imageCrop || [0, 0, 1, 1])]
+        : null;
       if (this.autoFit) this.fitToContainer();
       this.render();
     });
     state.on('page_updated', () => this.render());
+    state.on('mode_changed', (mode) => {
+      const page = state.getCurrentPage();
+      this.tempCrop = (mode === 'crop' && page)
+        ? [...(page.imageCrop || [0, 0, 1, 1])]
+        : null;
+      this.render();
+    });
     state.on('settings_updated', () => {
       if (this.autoFit) this.fitToContainer();
       this.render();
@@ -108,7 +122,7 @@ export class CanvasPreview {
     const page = state.getCurrentPage();
     if (!page) return;
 
-    const [ptW, ptH] = getPageDimensions(page.pageLandscape, state.settings.pageSize);
+    const [ptW, ptH] = getPageDimensions(page.pageLandscape, state.settings.pageSize, page);
     const pad = this.container.clientWidth < 500 ? 24 : 40;
     const containerW = this.container.clientWidth - pad;
     const containerH = this.container.clientHeight - pad;
@@ -164,7 +178,7 @@ export class CanvasPreview {
     }
 
     // Calculate Page Rectangle on screen
-    const [ptW, ptH] = getPageDimensions(page.pageLandscape, state.settings.pageSize);
+    const [ptW, ptH] = getPageDimensions(page.pageLandscape, state.settings.pageSize, page);
     const pageW = ptW * this.zoom;
     const pageH = ptH * this.zoom;
     const pageX = (cw - pageW) / 2;
@@ -195,6 +209,9 @@ export class CanvasPreview {
     // Render Page Content
     this.renderPageContent(ctx, page, pageX, pageY, pageW, pageH);
 
+    // Render optional Watermark / Header / Footer overlays
+    this.renderDocumentOverlays(ctx, pageX, pageY, pageW, pageH);
+
     // Render Page Number overlay if enabled
     if (state.settings.pageNumbers) {
       this.renderPageNumber(ctx, page, pageX, pageY, pageW, pageH);
@@ -223,13 +240,14 @@ export class CanvasPreview {
     const img = page.sourceImage;
     const natW = img.naturalWidth || img.width;
     const natH = img.naturalHeight || img.height;
+    const isCropMode = state.editorMode === 'crop';
 
     const geom = computePageImageGeometry(natW, natH, pw, ph, {
       imageRotation: page.imageRotation,
-      imageScale: page.imageScale,
-      imageOffsetX: page.imageOffsetX,
-      imageOffsetY: page.imageOffsetY,
-      imageCrop: page.imageCrop,
+      imageScale: isCropMode ? 1.0 : page.imageScale,
+      imageOffsetX: isCropMode ? 0 : page.imageOffsetX,
+      imageOffsetY: isCropMode ? 0 : page.imageOffsetY,
+      imageCrop: isCropMode ? null : page.imageCrop,
       unitScale: this.zoom,
       defaultFit: state.settings.defaultImageFit || 'fill'
     });
@@ -291,31 +309,94 @@ export class CanvasPreview {
     ctx.restore();
   }
 
+  getTempCrop() {
+    return this.tempCrop ? [...this.tempCrop] : null;
+  }
+
   renderCropOverlay(ctx, page, px, py, pw, ph) {
-    const crop = page.imageCrop || [0, 0, 1, 1];
-    const cropX = px + crop[0] * pw;
-    const cropY = py + crop[1] * ph;
-    const cropW = (crop[2] - crop[0]) * pw;
-    const cropH = (crop[3] - crop[1]) * ph;
+    const { x: ix, y: iy, w: iw, h: ih } = this.imgRect;
+    if (!iw || !ih) return;
+
+    if (!this.tempCrop) {
+      this.tempCrop = [...(page.imageCrop || [0, 0, 1, 1])];
+    }
+    const crop = this.tempCrop;
+    const cropX = ix + crop[0] * iw;
+    const cropY = iy + crop[1] * ih;
+    const cropW = (crop[2] - crop[0]) * iw;
+    const cropH = (crop[3] - crop[1]) * ih;
+
+    this.cropHandles = {
+      nw: { x: cropX, y: cropY },
+      ne: { x: cropX + cropW, y: cropY },
+      sw: { x: cropX, y: cropY + cropH },
+      se: { x: cropX + cropW, y: cropY + cropH }
+    };
 
     ctx.save();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-    ctx.fillRect(px, py, pw, cropY - py);
-    ctx.fillRect(px, cropY + cropH, pw, py + ph - (cropY + cropH));
-    ctx.fillRect(px, cropY, cropX - px, cropH);
-    ctx.fillRect(cropX + cropW, cropY, px + pw - (cropX + cropW), cropH);
+    ctx.fillRect(ix, iy, iw, cropY - iy);
+    ctx.fillRect(ix, cropY + cropH, iw, iy + ih - (cropY + cropH));
+    ctx.fillRect(ix, cropY, cropX - ix, cropH);
+    ctx.fillRect(cropX + cropW, cropY, ix + iw - (cropX + cropW), cropH);
 
     ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
     ctx.strokeRect(cropX, cropY, cropW, cropH);
+    ctx.setLineDash([]);
 
-    ctx.fillStyle = '#38bdf8';
-    const s = 6;
-    ctx.fillRect(cropX - s, cropY - s, s * 2, s * 2);
-    ctx.fillRect(cropX + cropW - s, cropY - s, s * 2, s * 2);
-    ctx.fillRect(cropX - s, cropY + cropH - s, s * 2, s * 2);
-    ctx.fillRect(cropX + cropW - s, cropY + cropH - s, s * 2, s * 2);
+    const s = 7;
+    for (const pt of Object.values(this.cropHandles)) {
+      ctx.fillStyle = '#38bdf8';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.rect(pt.x - s, pt.y - s, s * 2, s * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
     ctx.restore();
+  }
+
+  renderDocumentOverlays(ctx, px, py, pw, ph) {
+    const s = state.settings;
+    const wmText = String(s.watermarkText || '').trim();
+    const headerText = String(s.headerText || '').trim();
+    const footerText = String(s.footerText || '').trim();
+    if (!wmText && !headerText && !footerText) return;
+
+    if (wmText) {
+      const opacity = Math.max(0.05, Math.min(0.8, Number(s.watermarkOpacity) || 0.18));
+      const fontSizePx = Math.max(18, Math.min(pw, ph) * 0.09);
+      ctx.save();
+      ctx.globalAlpha = opacity;
+      ctx.fillStyle = s.watermarkColor || '#64748b';
+      ctx.font = `700 ${fontSizePx}px Helvetica, Arial, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.translate(px + pw / 2, py + ph / 2);
+      ctx.rotate(-Math.PI / 4);
+      ctx.fillText(wmText, 0, 0);
+      ctx.restore();
+    }
+
+    if (headerText || footerText) {
+      const hfPx = 9 * this.zoom * (96 / 72);
+      ctx.save();
+      ctx.fillStyle = '#475569';
+      ctx.font = `${hfPx}px Helvetica, Arial, sans-serif`;
+      ctx.textAlign = 'left';
+      if (headerText) {
+        ctx.textBaseline = 'top';
+        ctx.fillText(headerText, px + 40 * this.zoom, py + 16 * this.zoom);
+      }
+      if (footerText) {
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(footerText, px + 40 * this.zoom, py + ph - 16 * this.zoom);
+      }
+      ctx.restore();
+    }
   }
 
   renderPageNumber(ctx, page, px, py, pw, ph) {
@@ -365,11 +446,11 @@ export class CanvasPreview {
     };
   }
 
-  hitTestHandle(pt) {
-    for (const [corner, hPt] of Object.entries(this.handles)) {
+  hitTestHandle(pt, handleMap = this.handles, prefix = 'handle') {
+    for (const [corner, hPt] of Object.entries(handleMap)) {
       const dist = Math.hypot(pt.x - hPt.x, pt.y - hPt.y);
       if (dist <= this.HANDLE_HIT_RADIUS) {
-        return `handle-${corner}`;
+        return `${prefix}-${corner}`;
       }
     }
     return null;
@@ -386,8 +467,21 @@ export class CanvasPreview {
 
     const pt = this.getCanvasPoint(e);
 
+    if (state.editorMode === 'crop') {
+      const cropHit = this.hitTestHandle(pt, this.cropHandles, 'crop');
+      if (cropHit) {
+        this.isDragging = true;
+        this.dragMode = cropHit;
+        this.dragStartMouse = pt;
+        this.dragStartCrop = [...(this.tempCrop || page.imageCrop || [0, 0, 1, 1])];
+        if (e.preventDefault) e.preventDefault();
+      }
+      return;
+    }
+
     const handleHit = this.hitTestHandle(pt);
     if (handleHit) {
+      state.snapshotForUndo();
       this.isDragging = true;
       this.dragMode = handleHit;
       this.dragStartMouse = pt;
@@ -398,6 +492,7 @@ export class CanvasPreview {
     }
 
     if (this.isPointInImage(pt)) {
+      state.snapshotForUndo();
       this.isDragging = true;
       this.dragMode = 'pan';
       this.dragStartMouse = pt;
@@ -413,12 +508,14 @@ export class CanvasPreview {
     const pt = this.getCanvasPoint(e);
 
     if (!this.isDragging) {
-      const handleHit = this.hitTestHandle(pt);
-      if (handleHit === 'handle-nw' || handleHit === 'handle-se') {
+      const handleHit = state.editorMode === 'crop'
+        ? this.hitTestHandle(pt, this.cropHandles, 'crop')
+        : this.hitTestHandle(pt);
+      if (handleHit === 'handle-nw' || handleHit === 'handle-se' || handleHit === 'crop-nw' || handleHit === 'crop-se') {
         this.canvas.style.cursor = 'nwse-resize';
-      } else if (handleHit === 'handle-ne' || handleHit === 'handle-sw') {
+      } else if (handleHit === 'handle-ne' || handleHit === 'handle-sw' || handleHit === 'crop-ne' || handleHit === 'crop-sw') {
         this.canvas.style.cursor = 'nesw-resize';
-      } else if (this.isPointInImage(pt)) {
+      } else if (state.editorMode !== 'crop' && this.isPointInImage(pt)) {
         this.canvas.style.cursor = 'grab';
       } else {
         this.canvas.style.cursor = 'default';
@@ -429,6 +526,26 @@ export class CanvasPreview {
     const dx = pt.x - this.dragStartMouse.x;
     const dy = pt.y - this.dragStartMouse.y;
 
+    if (this.dragMode && this.dragMode.startsWith('crop-') && this.dragStartCrop) {
+      const iw = Math.max(1, this.imgRect.w);
+      const ih = Math.max(1, this.imgRect.h);
+      const dxPct = dx / iw;
+      const dyPct = dy / ih;
+      let [l, t, r, b] = this.dragStartCrop;
+      if (this.dragMode.includes('n')) t += dyPct;
+      if (this.dragMode.includes('s')) b += dyPct;
+      if (this.dragMode.includes('w')) l += dxPct;
+      if (this.dragMode.includes('e')) r += dxPct;
+
+      l = Math.max(0, Math.min(r - 0.05, l));
+      t = Math.max(0, Math.min(b - 0.05, t));
+      r = Math.max(l + 0.05, Math.min(1, r));
+      b = Math.max(t + 0.05, Math.min(1, b));
+      this.tempCrop = [l, t, r, b];
+      this.render();
+      return;
+    }
+
     if (this.dragMode === 'pan') {
       this.canvas.style.cursor = 'grabbing';
       const offsetPtX = this.dragStartOffset.x + dx / this.zoom;
@@ -436,7 +553,7 @@ export class CanvasPreview {
       state.updateCurrentPage({
         imageOffsetX: Math.round(offsetPtX * 10) / 10,
         imageOffsetY: Math.round(offsetPtY * 10) / 10
-      });
+      }, { saveUndo: false });
       return;
     }
 
@@ -450,7 +567,7 @@ export class CanvasPreview {
       if (startDist > 5) {
         const factor = currentDist / startDist;
         const newScale = Math.max(0.1, Math.min(4.0, this.dragStartScale * factor));
-        state.updateCurrentPage({ imageScale: Math.round(newScale * 100) / 100 });
+        state.updateCurrentPage({ imageScale: Math.round(newScale * 100) / 100 }, { saveUndo: false });
       }
     }
   }

@@ -3,10 +3,11 @@ Page Editor Panel
 =================
 Right panel: per-page controls.
 
+Image Editing    — Resize / Crop mode toggle, Apply Crop, and single-level Undo.
 Image Rotation   — rotates the image content on the page (page stays portrait/landscape).
 Page Orientation — switches the page canvas between Portrait and Landscape.
 Page Order       — move up/down in the document.
-Entire Document  — apply image rotation to every image page at once.
+Entire Document  — batch image rotation and All Portrait / All Landscape orientation.
 """
 
 from typing import TYPE_CHECKING
@@ -89,21 +90,60 @@ class PageEditorPanel(ctk.CTkFrame):
 
         self._undo_btn = ctk.CTkButton(
             self._actions_frame, text="↩️ Undo",
-            font=ctk.CTkFont(size=11), width=60,
+            font=ctk.CTkFont(size=11), width=56,
             fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
             command=self._on_undo
         )
-        self._undo_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self._undo_btn.pack(side="left", fill="x", expand=True, padx=(0, 3))
+
+        self._redo_btn = ctk.CTkButton(
+            self._actions_frame, text="↪️ Redo",
+            font=ctk.CTkFont(size=11), width=56,
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+            command=self._on_redo
+        )
+        self._redo_btn.pack(side="left", fill="x", expand=True, padx=(0, 3))
 
         self._apply_crop_btn = ctk.CTkButton(
-            self._actions_frame, text="✂️ Apply Crop",
-            font=ctk.CTkFont(size=11, weight="bold"), width=90,
+            self._actions_frame, text="✂️ Apply",
+            font=ctk.CTkFont(size=11, weight="bold"), width=68,
             fg_color=("#e67e22", "#d35400"), hover_color=("#d35400", "#b54400"),
             text_color="white",
             command=self._apply_crop
         )
-        # We will grid/pack this only when in crop mode
-        # self._apply_crop_btn.pack(side="left", fill="x", expand=True)
+        # Packed only when in crop mode
+
+        # ── Image Scale slider & Reset ────────────────────────────────
+        scale_header = ctk.CTkFrame(self, fg_color="transparent")
+        scale_header.pack(padx=14, pady=(2, 0), fill="x")
+        ctk.CTkLabel(
+            scale_header, text="Image Scale",
+            font=ctk.CTkFont(size=11, weight="bold"), anchor="w"
+        ).pack(side="left")
+        self._scale_val_lbl = ctk.CTkLabel(
+            scale_header, text="100%",
+            font=ctk.CTkFont(size=11), text_color="gray", width=40, anchor="e"
+        )
+        self._scale_val_lbl.pack(side="right")
+
+        scale_row = ctk.CTkFrame(self, fg_color="transparent")
+        scale_row.pack(padx=14, pady=(2, 6), fill="x")
+        self._scale_var = ctk.DoubleVar(value=100.0)
+        self._scale_slider = ctk.CTkSlider(
+            scale_row, from_=10, to=300, number_of_steps=290,
+            variable=self._scale_var, width=130,
+            command=self._on_scale_slide,
+        )
+        self._scale_slider.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self._scale_slider.bind("<ButtonPress-1>", lambda _e: self._on_scale_drag_start())
+
+        self._reset_fit_btn = ctk.CTkButton(
+            scale_row, text="Reset", width=48, height=24,
+            font=ctk.CTkFont(size=10),
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+            command=self._reset_image_fit,
+        )
+        self._reset_fit_btn.pack(side="right")
 
         self._divider()
 
@@ -208,6 +248,23 @@ class PageEditorPanel(ctk.CTkFrame):
         )
         self._down_btn.pack(side="left")
 
+        extra_page_frame = ctk.CTkFrame(self, fg_color="transparent")
+        extra_page_frame.pack(padx=14, pady=(4, 2), anchor="w")
+
+        self._dup_btn = ctk.CTkButton(
+            extra_page_frame, text="📄 Duplicate", width=100, height=30,
+            font=ctk.CTkFont(size=11), command=self._duplicate_page,
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+        )
+        self._dup_btn.pack(side="left", padx=(0, 6))
+
+        self._blank_btn = ctk.CTkButton(
+            extra_page_frame, text="➕ Blank Page", width=110, height=30,
+            font=ctk.CTkFont(size=11), command=self._insert_blank_page,
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+        )
+        self._blank_btn.pack(side="left")
+
         self._divider()
 
         # ── Entire Document ───────────────────────────────────────────
@@ -256,6 +313,23 @@ class PageEditorPanel(ctk.CTkFrame):
             command=lambda: self.controller.set_all_landscape(True),
         ).pack(side="left")
 
+        batch_order_frame = ctk.CTkFrame(self, fg_color="transparent")
+        batch_order_frame.pack(padx=14, pady=(2, 4), anchor="w")
+
+        ctk.CTkButton(
+            batch_order_frame, text="⇅ Reverse", width=96, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+            command=self.controller.reverse_pages,
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            batch_order_frame, text="🔤 Sort A→Z", width=96, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color=BTN_NORMAL, hover_color=BTN_HOVER, text_color=BTN_NORMAL_T,
+            command=self.controller.sort_pages_by_name,
+        ).pack(side="left")
+
         self._divider()
 
         # ── Delete ────────────────────────────────────────────────────
@@ -283,12 +357,14 @@ class PageEditorPanel(ctk.CTkFrame):
 
     def _register_events(self) -> None:
         from ..controller import (EVT_PAGE_SELECTED, EVT_PAGES_CHANGED,
-                                  EVT_PAGE_ROTATED, EVT_MODE_CHANGED, EVT_RESET)
+                                  EVT_PAGE_ROTATED, EVT_MODE_CHANGED, EVT_RESET,
+                                  EVT_HISTORY_CHANGED)
         self.controller.on(EVT_PAGE_SELECTED, lambda _: self.after(0, self._update_state))
         self.controller.on(EVT_PAGES_CHANGED, lambda _: self.after(0, self._update_state))
         self.controller.on(EVT_PAGE_ROTATED,  lambda _: self.after(0, self._update_state))
         self.controller.on(EVT_MODE_CHANGED,  lambda _: self.after(0, self._update_state))
         self.controller.on(EVT_RESET,         lambda _: self.after(0, self._update_state))
+        self.controller.on(EVT_HISTORY_CHANGED, lambda _: self.after(0, self._update_state))
 
     # ------------------------------------------------------------------ #
     # State update
@@ -305,11 +381,20 @@ class PageEditorPanel(ctk.CTkFrame):
         state = "normal" if is_image else "disabled"
         self._mode_seg.configure(state=state)
         
-        # Undo button state
-        can_undo = (self.controller._last_action_state is not None and 
-                    is_image and 
-                    self.controller._last_action_state.id == page.id)
-        self._undo_btn.configure(state="normal" if can_undo else "disabled")
+        # Undo / Redo button states (document-wide)
+        self._undo_btn.configure(state="normal" if self.controller.can_undo else "disabled")
+        self._redo_btn.configure(state="normal" if self.controller.can_redo else "disabled")
+
+        # Scale slider & Reset Fit
+        self._scale_slider.configure(state=state)
+        self._reset_fit_btn.configure(state=state)
+        if is_image:
+            pct = int(round((page.image_scale or 1.0) * 100))
+            self._scale_var.set(max(10, min(300, pct)))
+            self._scale_val_lbl.configure(text=f"{pct}%")
+        else:
+            self._scale_var.set(100)
+            self._scale_val_lbl.configure(text="100%")
 
         if is_image:
             self._mode_seg.set(self.controller.editor_mode.capitalize())
@@ -363,7 +448,7 @@ class PageEditorPanel(ctk.CTkFrame):
 
         # Enable / disable
         state = "normal" if has_pg else "disabled"
-        for btn in [self._up_btn, self._down_btn, self._del_btn,
+        for btn in [self._up_btn, self._down_btn, self._del_btn, self._dup_btn,
                     self._portrait_btn, self._landscape_btn]:
             btn.configure(state=state)
         for btn in self._rot_buttons.values():
@@ -385,8 +470,36 @@ class PageEditorPanel(ctk.CTkFrame):
         self._update_state()
 
     def _on_undo(self) -> None:
-        self.controller.undo_last_action()
+        self.controller.undo()
         self._update_state()
+
+    def _on_redo(self) -> None:
+        self.controller.redo()
+        self._update_state()
+
+    def _on_scale_drag_start(self) -> None:
+        idx = self.controller.current_index
+        page = self.controller.current_page
+        if idx >= 0 and page and page.is_image:
+            self.controller.save_undo_state(idx)
+
+    def _on_scale_slide(self, value: float) -> None:
+        idx = self.controller.current_index
+        page = self.controller.current_page
+        if idx >= 0 and page and page.is_image:
+            pct = int(round(value))
+            self._scale_val_lbl.configure(text=f"{pct}%")
+            self.controller.resize_image(
+                idx, pct / 100.0, page.image_offset_x, page.image_offset_y, save_undo=False
+            )
+
+    def _reset_image_fit(self) -> None:
+        idx = self.controller.current_index
+        page = self.controller.current_page
+        if idx >= 0 and page and page.is_image:
+            self.controller.save_undo_state(idx)
+            page.image_crop = None
+            self.controller.resize_image(idx, 1.0, 0.0, 0.0, save_undo=False)
 
     # ------------------------------------------------------------------ #
     # Actions
@@ -415,6 +528,15 @@ class PageEditorPanel(ctk.CTkFrame):
 
     def _move_down(self) -> None:
         self.controller.move_page_down(self.controller.current_index)
+
+    def _duplicate_page(self) -> None:
+        idx = self.controller.current_index
+        if idx >= 0:
+            self.controller.duplicate_page(idx)
+
+    def _insert_blank_page(self) -> None:
+        idx = self.controller.current_index
+        self.controller.insert_blank_page(after_index=idx if idx >= 0 else None)
 
     def _delete_page(self) -> None:
         idx = self.controller.current_index

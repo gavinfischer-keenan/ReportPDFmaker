@@ -140,3 +140,57 @@ export function formatFileSize(bytes) {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
+
+/**
+ * Parse a 1-based page range string (e.g. '1-3, 5') into 0-based indices.
+ * Empty / 'all' returns all indices [0 .. totalPages - 1].
+ */
+export function parsePageRange(spec, totalPages) {
+  if (!totalPages || totalPages <= 0) return [];
+  const raw = String(spec || '').trim();
+  if (!raw || raw.toLowerCase() === 'all') {
+    return Array.from({ length: totalPages }, (_, i) => i);
+  }
+
+  const selected = [];
+  const seen = new Set();
+  for (const token of raw.split(',')) {
+    const part = token.trim();
+    if (!part) {
+      throw new Error(`Empty token in page range "${raw}".`);
+    }
+    if (part.includes('-')) {
+      const pieces = part.split('-').map(p => p.trim());
+      if (pieces.length !== 2 || !/^\d+$/.test(pieces[0]) || !/^\d+$/.test(pieces[1])) {
+        throw new Error(`Invalid page range "${part}".`);
+      }
+      const start = parseInt(pieces[0], 10);
+      const end = parseInt(pieces[1], 10);
+      if (start < 1 || end < 1 || start > totalPages || end > totalPages) {
+        throw new Error(`Page range "${part}" out of bounds (1-${totalPages}).`);
+      }
+      const step = start <= end ? 1 : -1;
+      for (let num = start; step > 0 ? num <= end : num >= end; num += step) {
+        const idx = num - 1;
+        if (!seen.has(idx)) {
+          seen.add(idx);
+          selected.push(idx);
+        }
+      }
+    } else {
+      if (!/^\d+$/.test(part)) {
+        throw new Error(`Invalid page number "${part}".`);
+      }
+      const num = parseInt(part, 10);
+      if (num < 1 || num > totalPages) {
+        throw new Error(`Page ${num} out of bounds (1-${totalPages}).`);
+      }
+      const idx = num - 1;
+      if (!seen.has(idx)) {
+        seen.add(idx);
+        selected.push(idx);
+      }
+    }
+  }
+  return selected;
+}

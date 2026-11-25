@@ -10,7 +10,8 @@ import {
   convertImageFile,
   convertPdfFile,
   convertDocxFile,
-  convertTextFile
+  convertTextFile,
+  loadImage
 } from './converters.js';
 import { CanvasPreview } from './canvas-preview.js';
 import { buildPdfDocument, downloadPdf } from './pdf-builder.js';
@@ -20,6 +21,14 @@ import { CommandPalette } from './command-palette.js';
 import { ShortcutManager, renderShortcutsModalContent } from './shortcuts.js';
 import { SettingsUI } from './settings-ui.js';
 import { createSampleReportPages, createSamplePdfFile } from './sample-generator.js';
+import { showToast, confirmDialog, ModalFocusTrap } from './ui-feedback.js';
+import {
+  serializeSessionPages,
+  deserializeSessionPages,
+  saveSessionToIdb,
+  loadSessionFromIdb,
+  clearSessionFromIdb
+} from './session-store.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   // Core DOM Elements
@@ -53,11 +62,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // Page Editor Sidebar
   const emptyEditorMessage = document.getElementById('empty-editor-message');
   const pageEditorControls = document.getElementById('page-editor-controls');
+  const entireDocControls = document.getElementById('entire-doc-controls');
+  const btnUndo = document.getElementById('btn-undo');
+  const btnRedo = document.getElementById('btn-redo');
+  const btnModeResize = document.getElementById('btn-mode-resize');
+  const btnModeCrop = document.getElementById('btn-mode-crop');
+  const btnApplyCrop = document.getElementById('btn-apply-crop');
   const btnRotate0 = document.getElementById('btn-rotate-0');
   const btnRotate90 = document.getElementById('btn-rotate-90');
   const btnRotate180 = document.getElementById('btn-rotate-180');
   const btnRotate270 = document.getElementById('btn-rotate-270');
   const rotButtons = [btnRotate0, btnRotate90, btnRotate180, btnRotate270];
+  const btnRotateAll0 = document.getElementById('btn-rotate-all-0');
+  const btnRotateAll90 = document.getElementById('btn-rotate-all-90');
+  const btnRotateAll180 = document.getElementById('btn-rotate-all-180');
+  const btnRotateAll270 = document.getElementById('btn-rotate-all-270');
+  const btnAllPortrait = document.getElementById('btn-all-portrait');
+  const btnAllLandscape = document.getElementById('btn-all-landscape');
   const radioPortrait = document.getElementById('orient-portrait');
   const radioLandscape = document.getElementById('orient-landscape');
   const btnFitScale = document.getElementById('btn-fit-scale');
@@ -65,7 +86,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const scaleValueLabel = document.getElementById('scale-value-label');
   const btnMoveUp = document.getElementById('btn-move-up');
   const btnMoveDown = document.getElementById('btn-move-down');
+  const btnDuplicatePage = document.getElementById('btn-duplicate-page');
+  const btnInsertBlank = document.getElementById('btn-insert-blank');
   const btnDeletePage = document.getElementById('btn-delete-page');
+  const btnReversePages = document.getElementById('btn-reverse-pages');
+  const btnSortPages = document.getElementById('btn-sort-pages');
 
   // Header Controls & Export
   const btnCommandPalette = document.getElementById('btn-command-palette');
@@ -191,7 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       console.error('Failed to load sample report:', err);
-      alert('Could not generate sample report: ' + err.message);
+      showToast('Could not generate sample report: ' + err.message, 'error');
     } finally {
       setTimeout(() => progressBarContainer.classList.add('hidden'), 600);
     }
@@ -296,7 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (err) {
         console.error(`Error processing ${file.name}:`, err);
-        alert(`Failed to import "${file.name}":\n${err.message}`);
+        showToast(`Failed to import "${file.name}": ${err.message}`, 'error');
       }
     }
 
@@ -318,6 +343,22 @@ document.addEventListener('DOMContentLoaded', () => {
   state.on('pages_changed', renderPagesList);
   state.on('page_selected', updateSelectedPageUI);
   state.on('page_updated', updateSelectedPageUI);
+  state.on('history_changed', updateHistoryButtons);
+  state.on('mode_changed', updateModeButtons);
+
+  function updateHistoryButtons() {
+    if (btnUndo) btnUndo.disabled = !state.canUndo();
+    if (btnRedo) btnRedo.disabled = !state.canRedo();
+  }
+
+  function updateModeButtons() {
+    const isCrop = state.editorMode === 'crop';
+    const hasImg = Boolean(state.getCurrentPage()?.sourceImage);
+    btnModeResize?.classList.toggle('active', !isCrop);
+    btnModeCrop?.classList.toggle('active', isCrop);
+    if (btnModeCrop) btnModeCrop.disabled = !hasImg;
+    btnApplyCrop?.classList.toggle('hidden', !isCrop || !hasImg);
+  }
 
   function renderPagesList(pages) {
     pagesListEl.innerHTML = '';
@@ -326,6 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const hasPages = pages.length > 0;
     btnClearAll.disabled = !hasPages;
+    entireDocControls?.classList.toggle('hidden', !hasPages);
     previewEmptyState?.classList.toggle('hidden', hasPages && Boolean(state.getCurrentPage()));
 
     if (!hasPages) {
@@ -478,11 +520,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnMoveUp.disabled = state.currentIndex <= 0;
     btnMoveDown.disabled = state.currentIndex >= state.pages.length - 1;
+    updateModeButtons();
   }
 
   // Initial empty state render
   renderPagesList(state.pages);
   updateSelectedPageUI(state.getCurrentPage());
+  updateHistoryButtons();
+  updateModeButtons();
 
   // --------------------------------------------------------------------------
   // Navigation & Zoom Listeners
@@ -508,31 +553,41 @@ document.addEventListener('DOMContentLoaded', () => {
     preview.render();
   });
 
-  btnClearAll.addEventListener('click', () => {
+  btnClearAll.addEventListener('click', async () => {
     if (state.pages.length === 0) return;
-    if (confirm('Are you sure you want to clear all pages?')) {
+    const ok = await confirmDialog({
+      title: 'Clear All Pages?',
+      message: 'This will remove all pages from the current workspace queue. You can still undo with Ctrl+Z.',
+      confirmLabel: 'Clear All',
+      danger: true
+    });
+    if (ok) {
       state.clearAll();
+      showToast('Cleared all pages from workspace.', 'info');
     }
   });
 
   // --------------------------------------------------------------------------
   // Page Editor Controls
   // --------------------------------------------------------------------------
-  function rotateCurrentPage(delta) {
+  function setCurrentPageRotation(degrees) {
     const page = state.getCurrentPage();
     if (!page) return;
-    const nextRot = ((page.imageRotation || 0) + delta) % 360;
-    state.updateCurrentPage({ imageRotation: nextRot });
+    const normalized = ((degrees % 360) + 360) % 360;
+    state.updateCurrentPage({ imageRotation: normalized });
     renderPagesList(state.pages);
   }
 
-  btnRotate0.addEventListener('click', () => {
-    if (!state.getCurrentPage()) return;
-    state.updateCurrentPage({ imageRotation: 0 });
-  });
-  btnRotate90.addEventListener('click', () => rotateCurrentPage(90));
-  btnRotate180.addEventListener('click', () => rotateCurrentPage(180));
-  btnRotate270.addEventListener('click', () => rotateCurrentPage(270));
+  function rotateCurrentPage(delta) {
+    const page = state.getCurrentPage();
+    if (!page) return;
+    setCurrentPageRotation((page.imageRotation || 0) + delta);
+  }
+
+  btnRotate0.addEventListener('click', () => setCurrentPageRotation(0));
+  btnRotate90.addEventListener('click', () => setCurrentPageRotation(90));
+  btnRotate180.addEventListener('click', () => setCurrentPageRotation(180));
+  btnRotate270.addEventListener('click', () => setCurrentPageRotation(270));
 
   radioPortrait.addEventListener('change', () => {
     state.updateCurrentPage({ pageLandscape: false });
@@ -555,11 +610,64 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  scaleSlider.addEventListener('pointerdown', () => {
+    if (state.getCurrentPage()) state.snapshotForUndo();
+  });
   scaleSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value, 10);
     scaleValueLabel.textContent = `${val}%`;
-    state.updateCurrentPage({ imageScale: val / 100 });
+    state.updateCurrentPage({ imageScale: val / 100 }, { saveUndo: false });
   });
+
+  btnUndo?.addEventListener('click', () => state.undo());
+  btnRedo?.addEventListener('click', () => state.redo());
+  btnModeResize?.addEventListener('click', () => state.setEditorMode('resize'));
+  btnModeCrop?.addEventListener('click', () => state.setEditorMode('crop'));
+  btnApplyCrop?.addEventListener('click', () => {
+    const crop = preview.getTempCrop();
+    if (crop) {
+      state.updateCurrentPage({ imageCrop: crop });
+    }
+    state.setEditorMode('resize');
+  });
+
+  btnRotateAll0?.addEventListener('click', () => state.rotateAllPages(0));
+  btnRotateAll90?.addEventListener('click', () => state.rotateAllPages(90));
+  btnRotateAll180?.addEventListener('click', () => state.rotateAllPages(180));
+  btnRotateAll270?.addEventListener('click', () => state.rotateAllPages(270));
+  async function createBlankCanvasAssets(title = '') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 620;
+    canvas.height = 877;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const clean = String(title || '').trim();
+    if (clean) {
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 28px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(clean, canvas.width / 2, canvas.height / 2, canvas.width - 80);
+    }
+    const url = canvas.toDataURL('image/png');
+    const img = await loadImage(url);
+    return { img, thumbUrl: url };
+  }
+
+  async function addBlankOrDividerPage() {
+    const { img, thumbUrl } = await createBlankCanvasAssets('');
+    state.insertBlankPage(state.currentIndex >= 0 ? state.currentIndex : null, '', img, thumbUrl);
+  }
+
+  btnAllPortrait?.addEventListener('click', () => state.setAllOrientation(false));
+  btnAllLandscape?.addEventListener('click', () => state.setAllOrientation(true));
+  btnDuplicatePage?.addEventListener('click', () => {
+    if (state.currentIndex >= 0) state.duplicatePage(state.currentIndex);
+  });
+  btnInsertBlank?.addEventListener('click', () => { addBlankOrDividerPage(); });
+  btnReversePages?.addEventListener('click', () => state.reversePages());
+  btnSortPages?.addEventListener('click', () => state.sortPagesByName(false));
 
   btnMoveUp.addEventListener('click', () => {
     if (state.currentIndex > 0) state.movePage(state.currentIndex, state.currentIndex - 1);
@@ -578,7 +686,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --------------------------------------------------------------------------
   async function exportDocumentPdf() {
     if (state.pages.length === 0) {
-      alert('Please add at least one page (or load the Sample Report) before downloading.');
+      showToast('Please add at least one page (or load the Sample Report) before downloading.', 'warning');
       return;
     }
 
@@ -606,7 +714,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } catch (err) {
       console.error('PDF export failed:', err);
-      alert('Error generating PDF:\n' + err.message);
+      showToast('Error generating PDF: ' + err.message, 'error');
     } finally {
       btnExportPdf.disabled = false;
       btnExportPdf.innerHTML = '<span class="btn-emoji">💾</span><span class="btn-label">Download PDF</span>';
@@ -622,10 +730,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function openShrinkModal() {
     shrinkModal.classList.remove('hidden');
     resetShrinkDialog();
+    modalTrap.activate(shrinkModal);
   }
 
   function closeShrinkModal() {
     shrinkModal.classList.add('hidden');
+    modalTrap.deactivate(true);
   }
 
   btnShrinkPdf.addEventListener('click', openShrinkModal);
@@ -684,13 +794,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const sampleFile = await createSamplePdfFile();
       handleShrinkFile(sampleFile);
     } catch (err) {
-      alert('Could not create sample PDF: ' + err.message);
+      showToast('Could not create sample PDF: ' + err.message, 'error');
     }
   });
 
   function handleShrinkFile(file) {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert('Please select a PDF file to compress.');
+      showToast('Please select a PDF file to compress.', 'warning');
       return;
     }
     shrinkSelectedFile = file;
@@ -728,7 +838,7 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
     } catch (err) {
       console.error('Compression failed:', err);
-      alert('Compression failed: ' + err.message);
+      showToast('Compression failed: ' + err.message, 'error');
       shrinkProgress.classList.add('hidden');
     } finally {
       btnStartCompress.disabled = false;
@@ -748,15 +858,19 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-close-3d').addEventListener('click', () => threeModal.close());
 
   // --------------------------------------------------------------------------
+  const modalTrap = new ModalFocusTrap();
+
   // Shortcuts Overlay ("?") & Command Palette (Cmd/Ctrl+K)
   // --------------------------------------------------------------------------
   renderShortcutsModalContent(shortcutsModalBody);
 
   function openShortcutsModal() {
     shortcutsModal.classList.remove('hidden');
+    modalTrap.activate(shortcutsModal);
   }
   function closeShortcutsModal() {
     shortcutsModal.classList.add('hidden');
+    modalTrap.deactivate(true);
   }
   function toggleShortcutsModal() {
     if (shortcutsModal.classList.contains('hidden')) openShortcutsModal();
@@ -860,9 +974,54 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.currentIndex >= 0) state.removePage(state.currentIndex);
         break;
       case 'clear-all':
-        if (state.pages.length > 0 && confirm('Are you sure you want to clear all pages?')) {
-          state.clearAll();
+        if (state.pages.length > 0) {
+          confirmDialog({
+            title: 'Clear All Pages?',
+            message: 'This will remove all pages from the current workspace queue. You can still undo with Ctrl+Z.',
+            confirmLabel: 'Clear All',
+            danger: true
+          }).then((ok) => {
+            if (ok) {
+              state.clearAll();
+              showToast('Cleared all pages from workspace.', 'info');
+            }
+          });
         }
+        break;
+      case 'undo':
+        state.undo();
+        break;
+      case 'redo':
+        state.redo();
+        break;
+      case 'toggle-crop-mode':
+        if (page?.sourceImage) {
+          state.setEditorMode(state.editorMode === 'crop' ? 'resize' : 'crop');
+        }
+        break;
+      case 'rotate-all-90':
+        if (state.pages.length > 0) {
+          const base = page ? (page.imageRotation || 0) : 0;
+          state.rotateAllPages((base + 90) % 360);
+        }
+        break;
+      case 'all-portrait':
+        state.setAllOrientation(false);
+        break;
+      case 'all-landscape':
+        state.setAllOrientation(true);
+        break;
+      case 'duplicate-page':
+        if (state.currentIndex >= 0) state.duplicatePage(state.currentIndex);
+        break;
+      case 'insert-blank':
+        addBlankOrDividerPage();
+        break;
+      case 'reverse-pages':
+        state.reversePages();
+        break;
+      case 'sort-pages':
+        state.sortPagesByName(false);
         break;
       case 'toggle-theme': {
         const cur = document.documentElement.getAttribute('data-theme');
@@ -906,6 +1065,16 @@ document.addEventListener('DOMContentLoaded', () => {
         { id: 'move-up', icon: '▲', label: 'Move Selected Page Up', disabled: state.currentIndex <= 0, keywords: 'reorder earlier' },
         { id: 'move-down', icon: '▼', label: 'Move Selected Page Down', disabled: !hasMultiple || state.currentIndex >= state.pages.length - 1, keywords: 'reorder later' },
         { id: 'delete-page', icon: '🗑️', label: 'Delete Selected Page', shortcut: 'Del', disabled: !hasPage, keywords: 'remove delete' },
+        { id: 'undo', icon: '↩️', label: 'Undo Last Change', shortcut: 'Ctrl+Z', disabled: !state.canUndo(), keywords: 'undo revert history' },
+        { id: 'redo', icon: '↪️', label: 'Redo Change', shortcut: 'Ctrl+Y', disabled: !state.canRedo(), keywords: 'redo history' },
+        { id: 'toggle-crop-mode', icon: '✂️', label: state.editorMode === 'crop' ? 'Exit Crop Mode (Resize)' : 'Crop Image', disabled: !hasPage, keywords: 'crop trim' },
+        { id: 'rotate-all-90', icon: '🔁', label: 'Rotate All Pages +90°', disabled: state.pages.length === 0, keywords: 'batch rotate all' },
+        { id: 'all-portrait', icon: '📄', label: 'Set All Pages to Portrait', disabled: state.pages.length === 0, keywords: 'batch portrait all' },
+        { id: 'all-landscape', icon: '🖼️', label: 'Set All Pages to Landscape', disabled: state.pages.length === 0, keywords: 'batch landscape all' },
+        { id: 'duplicate-page', icon: '📄', label: 'Duplicate Selected Page', disabled: !hasPage, keywords: 'copy clone duplicate page' },
+        { id: 'insert-blank', icon: '➕', label: 'Insert Blank Page', keywords: 'blank divider spacer page' },
+        { id: 'reverse-pages', icon: '⇅', label: 'Reverse Page Order', disabled: !hasMultiple, keywords: 'reverse flip order' },
+        { id: 'sort-pages', icon: '🔤', label: 'Sort Pages by Name (A→Z)', disabled: !hasMultiple, keywords: 'sort alphabetical name' },
         { id: 'clear-all', icon: '🧹', label: 'Clear All Pages', disabled: state.pages.length === 0, keywords: 'reset empty queue' },
         { id: 'toggle-theme', icon: '🌗', label: 'Toggle Dark / Light Theme', shortcut: 'T', keywords: 'appearance dark light mode' },
         { id: 'toggle-shortcuts', icon: '⌨️', label: 'Show Keyboard Shortcuts', shortcut: '?', keywords: 'help keys hotkeys' }
@@ -938,4 +1107,46 @@ document.addEventListener('DOMContentLoaded', () => {
     onToggleShortcuts: toggleShortcutsModal
   });
   shortcutManager.attach();
+
+  // --------------------------------------------------------------------------
+  // IndexedDB Workspace Session Auto-Save & Recovery
+  // --------------------------------------------------------------------------
+  let sessionSaveTimer = null;
+  let restoringSession = false;
+
+  function scheduleSessionSave() {
+    if (restoringSession) return;
+    clearTimeout(sessionSaveTimer);
+    sessionSaveTimer = setTimeout(async () => {
+      if (state.pages.length === 0) {
+        await clearSessionFromIdb();
+      } else {
+        const payload = serializeSessionPages(state.pages, state.currentIndex);
+        await saveSessionToIdb(payload);
+      }
+    }, 600);
+  }
+
+  state.on('pages_changed', scheduleSessionSave);
+  state.on('page_updated', scheduleSessionSave);
+  state.on('page_selected', scheduleSessionSave);
+
+  (async () => {
+    if (state.pages.length > 0) return;
+    const saved = await loadSessionFromIdb();
+    if (!saved || !Array.isArray(saved.pages) || saved.pages.length === 0) return;
+    restoringSession = true;
+    try {
+      const restored = await deserializeSessionPages(saved, loadImage);
+      if (restored.pages.length > 0) {
+        state.pages = restored.pages;
+        state.currentIndex = restored.currentIndex;
+        state.emit('pages_changed', state.pages);
+        state.emit('page_selected', state.getCurrentPage());
+        showToast(`Restored previous session (${restored.pages.length} page${restored.pages.length === 1 ? '' : 's'})`, 'info');
+      }
+    } finally {
+      restoringSession = false;
+    }
+  })();
 });
